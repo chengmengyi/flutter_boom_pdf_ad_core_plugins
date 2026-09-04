@@ -969,10 +969,6 @@ class FlutterBoomPdfAdCorePlugins {
         if (entry.info.parsedAdType == AdType.appOpen) {
           unawaited(AdDailyCountManager.instance.recordShow());
         }
-        if (entry.info.parsedAdType?.isFullScreen == true &&
-            !_skipReloadAfterClosePlacements.contains(placement)) {
-          unawaited(loadPlacement<Object>(placement, force: true));
-        }
       case AdNetworkEventType.clicked:
         _listener?.onAdClicked(
           placement,
