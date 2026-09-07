@@ -131,44 +131,41 @@ await ads.initializeAdmob();
 
 ```dart
 void configureAdPlacements(FlutterBoomPdfAdCorePlugins ads) {
-  ads.updatePlacementConfig(
-    'home_interstitial',
-    <AdInfoBean>[
-      AdInfoBean(
-        adId: 'ADMOB_INTERSTITIAL_UNIT_ID',
-        adPlat: 'admob',
-        adType: 'int',
-        sort: 100,
-        userGroup: <int>[0],
-      ),
-      AdInfoBean(
-        adId: 'TRADPLUS_INTERSTITIAL_UNIT_ID',
-        adPlat: 'tradplus',
-        adType: 'int',
-        sort: 90,
-        userGroup: <int>[0],
-      ),
-    ],
-  );
-
-  ads.updatePlacementConfig(
-    'reward_video',
-    <AdInfoBean>[
-      AdInfoBean(
-        adId: 'ADMOB_REWARDED_UNIT_ID',
-        adPlat: 'admob',
-        adType: 'rv',
-        sort: 100,
-        userGroup: <int>[0],
-      ),
-      AdInfoBean(
-        adId: 'TRADPLUS_REWARDED_UNIT_ID',
-        adPlat: 'tradplus',
-        adType: 'rv',
-        sort: 90,
-        userGroup: <int>[0],
-      ),
-    ],
+  ads.updateConfigs<String>(
+    <String, List<AdInfoBean>>{
+      'home_interstitial': <AdInfoBean>[
+        AdInfoBean(
+          adId: 'ADMOB_INTERSTITIAL_UNIT_ID',
+          adPlat: 'admob',
+          adType: 'int',
+          sort: 100,
+          userGroup: <int>[0],
+        ),
+        AdInfoBean(
+          adId: 'TRADPLUS_INTERSTITIAL_UNIT_ID',
+          adPlat: 'tradplus',
+          adType: 'int',
+          sort: 90,
+          userGroup: <int>[0],
+        ),
+      ],
+      'reward_video': <AdInfoBean>[
+        AdInfoBean(
+          adId: 'ADMOB_REWARDED_UNIT_ID',
+          adPlat: 'admob',
+          adType: 'rv',
+          sort: 100,
+          userGroup: <int>[0],
+        ),
+        AdInfoBean(
+          adId: 'TRADPLUS_REWARDED_UNIT_ID',
+          adPlat: 'tradplus',
+          adType: 'rv',
+          sort: 90,
+          userGroup: <int>[0],
+        ),
+      ],
+    },
   );
 }
 ```
@@ -196,7 +193,7 @@ void configureAdPlacements(FlutterBoomPdfAdCorePlugins ads) {
 | `ban` | Banner |
 | `nat` | 原生广告 |
 
-一次设置多个广告位可以使用 `updateConfigs`：
+广告配置通过 `updateConfigs` 一次性设置：
 
 ```dart
 ads.updateConfigs<String>(
@@ -220,13 +217,15 @@ if (entry == null) {
 
 当前 Core 的请求规则：
 
-1. 按 `sort` 从高到低排序。
-2. 先请求优先级最高的配置。
-3. 当前配置请求失败时，立即请求下一条配置；下一条可以属于另一个平台。
-4. 调用 `updateAdRequestTimeoutSeconds(3)` 后，如果当前请求 3 秒仍未完成，会提前启动下一条请求作为兜底。
-5. `loadPlacement` 返回第一个成功加载的广告，已成功的广告会进入 Core 缓存。
-6. 同一广告位已经有缓存时，普通请求直接返回缓存；传入 `force: true` 才会强制发起新请求。
-7. 同一广告位已有请求正在进行时，后续请求会复用同一个 Future，避免重复加载。
+1. 先按照 `adPlat` 将同一广告位的配置分成 AdMob、TradPlus 等平台组。
+2. 不同平台组同时开始请求，因此 AdMob 和 TradPlus 的第一条配置会并行请求。
+3. 每个平台组内部按 `sort` 从高到低排序，沿用原 `flutter_pdf_ad_plugins` 的瀑布逻辑。
+4. 某个平台当前配置失败时，只会继续请求该平台组内的下一条配置，不会影响其他平台。
+5. 调用 `updateAdRequestTimeoutSeconds(3)` 后，某个平台当前配置 3 秒仍未完成，会提前启动同平台的下一条配置。
+6. `loadPlacement` 会等待每个平台获得一个成功结果或者该平台全部失败，再从成功结果中返回 `sort` 优先级最高的广告。
+7. 各平台成功加载的广告都会进入 Core 缓存，为后续竞价保留候选广告。
+8. 同一广告位已经有缓存时，普通请求直接返回缓存；传入 `force: true` 才会强制发起新一轮多平台请求。
+9. 同一广告位已有请求正在进行时，后续请求会复用同一个 Future，避免重复加载。
 
 如果配置了超时兜底，可能出现两个平台请求都已启动的情况。某个广告位只希望保留第一个成功结果时，可以配置：
 
@@ -236,7 +235,7 @@ ads.updateSingleFillPlacements(<String>{
 });
 ```
 
-这套规则目前是优先级和失败兜底，不是价格竞价。以后加入竞价模块后，可以在两个平台都返回价格后再决定展示对象，业务层的广告位 API 不需要改变。
+这套规则目前会同时获得各平台的候选广告，但最终仍按 `sort` 优先级选择，不是价格竞价。以后加入竞价模块后，可以直接对缓存中的多平台候选广告比价，业务层的广告位 API 不需要改变。
 
 直接传入临时配置：
 

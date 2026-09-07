@@ -2,7 +2,8 @@
     <application
         android:label="flutter_boom_pdf_ad_core_plugins_example"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:hardwareAccelerated="true">
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-3940256099942544~3347511713" />
