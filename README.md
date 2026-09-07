@@ -16,7 +16,7 @@ Boom PDF 广告 Core。Core 不依赖具体广告 SDK，统一负责：
 
 业务代码只调用 Core。需要哪个平台，就在 App 中依赖并安装哪个 Adapter。
 
-> 当前版本已支持多平台统一请求和缓存，但还没有实现按价格竞价。当前选择规则是 `sort` 优先级和请求完成情况。
+> Android 同时安装 AdMob 和 TradPlus 时，`showCachedAd` 会在展示前自动比价；只安装一个平台或只有一个平台加载成功时，直接使用现有缓存。
 
 ## 1. 添加依赖
 
@@ -63,7 +63,16 @@ Future<void> main() async {
   final ads = FlutterBoomPdfAdCorePlugins.instance;
 
   // 1. 注册平台。install 必须在 initializeNetworks 之前调用。
-  FlutterBoomPdfAdAdmobPlugins.install(into: ads);
+  await FlutterBoomPdfAdAdmobPlugins.install(
+    into: ads,
+    queryAdRevenueConfig: const QueryAdRevenueConfig(
+      enableRevenue: true,
+      openKeyList: <String>['YOUR_OPEN_REVENUE_KEY'],
+      intKeyList: <String>['YOUR_INTERSTITIAL_REVENUE_KEY'],
+      nativeKeyList: <String>['YOUR_NATIVE_REVENUE_KEY'],
+      libName: 'YOUR_SO_LIBRARY_NAME_WITHOUT_LIB_PREFIX',
+    ),
+  );
   FlutterBoomPdfAdTradplusPlugins.install(
     into: ads,
     appId: 'YOUR_TRADPLUS_APP_ID',
@@ -235,7 +244,14 @@ ads.updateSingleFillPlacements(<String>{
 });
 ```
 
-这套规则目前会同时获得各平台的候选广告，但最终仍按 `sort` 优先级选择，不是价格竞价。以后加入竞价模块后，可以直接对缓存中的多平台候选广告比价，业务层的广告位 API 不需要改变。
+展示前的选择规则：
+
+1. 缓存里只有一个候选广告时直接返回，不发起比价。
+2. 同时存在 AdMob 和 TradPlus 缓存时，Core 取出 AdMob 加载成功时记录的预估收益。
+3. Core 把微单位收益除以 `1000000` 后传给 TradPlus，Android 端调用 `TPOutcome().isTPW(admobPrice, tpAdInfo)`。
+4. `TPOutcome` 返回 `true` 时展示 TradPlus，否则展示 AdMob；比价调用异常时回退到原 `sort` 顺序，避免影响展示。
+
+AdMob 的预估收益由 `query_ad_revenue` 提供，当前支持 App Open、插屏和原生广告；激励视频和 Banner 暂按 `0` 参与比较。查询收益所需的 `.so` 仍放在业务 App，由 `QueryAdRevenueConfig.libName` 指定，不需要放进 AdMob Adapter。
 
 直接传入临时配置：
 
@@ -333,15 +349,15 @@ final shown = await ads.loadAndShow(
                                   删除已展示广告的缓存
                                               |
                                               v
-                             缓存为空时自动请求下一条广告
+                            只为刚展示的平台请求下一条广告
 ```
 
 注意：
 
 - 展示成功回调不会请求下一条广告。
 - 用户关闭广告后，`showCachedAd` 才会完成，并清理刚刚展示的缓存。
-- 清理后如果该广告位没有其他缓存，Core 会自动请求下一条。
-- 如果该广告位已经有备用缓存，则不会重复请求。
+- Core 会在关闭后为刚刚展示的平台请求下一条广告。
+- 其他平台未展示的候选缓存会保留；等刚展示的平台补充成功后，下次展示仍会进行比价。
 - 展示失败时也会清理失效广告并补充请求，避免广告位一直不可用。
 
 某些广告位不希望关闭后自动补充，可以配置：
@@ -498,7 +514,15 @@ class AppAdListener extends FlutterBoomPdfAdListener {
 只使用 AdMob：
 
 ```dart
-FlutterBoomPdfAdAdmobPlugins.install();
+await FlutterBoomPdfAdAdmobPlugins.install(
+  queryAdRevenueConfig: const QueryAdRevenueConfig(
+    enableRevenue: true,
+    openKeyList: <String>['YOUR_OPEN_REVENUE_KEY'],
+    intKeyList: <String>['YOUR_INTERSTITIAL_REVENUE_KEY'],
+    nativeKeyList: <String>['YOUR_NATIVE_REVENUE_KEY'],
+    libName: 'YOUR_SO_LIBRARY_NAME_WITHOUT_LIB_PREFIX',
+  ),
+);
 await ads.initPlugins(distinctId: userId);
 await ads.initializeAdmob();
 ```

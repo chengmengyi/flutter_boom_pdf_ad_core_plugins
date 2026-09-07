@@ -96,7 +96,7 @@ class AdLoadRequest {
 }
 
 class AdLoadResult {
-  const AdLoadResult.success(this.ad)
+  const AdLoadResult.success(this.ad, {this.estimatedRevenueMicros = 0})
     : failureReason = null,
       adNetwork = null,
       adSourceName = null;
@@ -105,9 +105,11 @@ class AdLoadResult {
     this.failureReason, {
     this.adNetwork,
     this.adSourceName,
-  }) : ad = null;
+  }) : ad = null,
+       estimatedRevenueMicros = 0;
 
   final LoadedNetworkAd? ad;
+  final double estimatedRevenueMicros;
   final String? failureReason;
   final String? adNetwork;
   final String? adSourceName;
@@ -156,6 +158,12 @@ class AdNetworkEvent {
   final double? valueMicros;
   final String? currencyCode;
   final String? precisionType;
+}
+
+/// Optional capability implemented by an ad whose SDK owns the final auction
+/// decision. The competitor value is expressed in revenue micros.
+abstract interface class AdAuctionCandidate {
+  Future<bool?> winsAgainst({required double competitorRevenueMicros});
 }
 
 abstract interface class LoadedNetworkAd {

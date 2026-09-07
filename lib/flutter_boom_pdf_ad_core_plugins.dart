@@ -563,7 +563,7 @@ class FlutterBoomPdfAdCorePlugins {
   Future<LoadedAdCacheEntry?> getCachedEntry<K>(K placement) async {
     final key = placement as Object;
     await _evictExpired(key);
-    return _firstEntry(key);
+    return _selectCachedEntry(key);
   }
 
   Future<Object?> getCachedAd<K>(K placement) async {
@@ -881,6 +881,7 @@ class FlutterBoomPdfAdCorePlugins {
         final entry = LoadedAdCacheEntry(
           info: info,
           ad: ad,
+          estimatedRevenueMicros: result.estimatedRevenueMicros,
           cachedAt: DateTime.now(),
           requestOrder: indexedConfig.requestOrder,
         );
@@ -1100,11 +1101,34 @@ class FlutterBoomPdfAdCorePlugins {
   }
 
   Future<void> _consumeEntry(Object placement, LoadedAdCacheEntry entry) async {
+    final consumedNetworkId = entry.info.normalizedNetworkId;
     _removeEntry(placement, entry);
     await entry.dispose();
-    if (!_skipReloadAfterClosePlacements.contains(placement) &&
-        _firstEntry(placement) == null) {
-      unawaited(loadPlacement<Object>(placement, force: true));
+    if (!_skipReloadAfterClosePlacements.contains(placement)) {
+      unawaited(_reloadConsumedNetwork(placement, consumedNetworkId));
+    }
+  }
+
+  Future<void> _reloadConsumedNetwork(
+    Object placement,
+    String networkId,
+  ) async {
+    try {
+      final configs = await _resolveConfigs(placement);
+      final networkConfigs = configs
+          ?.where((info) => info.normalizedNetworkId == networkId)
+          .toList(growable: false);
+      if (networkConfigs == null || networkConfigs.isEmpty) return;
+      await loadPlacement<Object>(
+        placement,
+        configs: networkConfigs,
+        force: true,
+      );
+    } catch (error) {
+      _log(
+        'reload-after-close-failed placement=$placement '
+        'network=$networkId error=$error',
+      );
     }
   }
 
@@ -1134,6 +1158,45 @@ class FlutterBoomPdfAdCorePlugins {
   LoadedAdCacheEntry? _firstEntry(Object placement) {
     final entries = _cache[placement];
     return entries == null || entries.isEmpty ? null : entries.first;
+  }
+
+  Future<LoadedAdCacheEntry?> _selectCachedEntry(Object placement) async {
+    final first = _firstEntry(placement);
+    if (first == null || _adapters.length <= 1) return first;
+
+    final entries = _cache[placement];
+    if (entries == null || entries.length <= 1) return first;
+
+    LoadedAdCacheEntry? admob;
+    LoadedAdCacheEntry? tradplus;
+    for (final entry in entries) {
+      if (admob == null && entry.ad.networkId == _admobNetworkId) {
+        admob = entry;
+      } else if (tradplus == null && entry.ad.networkId == 'tradplus') {
+        tradplus = entry;
+      }
+      if (admob != null && tradplus != null) break;
+    }
+    if (admob == null || tradplus == null) return first;
+
+    final candidate = tradplus.ad;
+    if (candidate is! AdAuctionCandidate) return first;
+    final auctionCandidate = candidate as AdAuctionCandidate;
+    try {
+      final tpWins = await auctionCandidate.winsAgainst(
+        competitorRevenueMicros: admob.estimatedRevenueMicros,
+      );
+      if (tpWins == null) return first;
+      _log(
+        'auction placement=$placement admobMicros='
+        '${admob.estimatedRevenueMicros} winner='
+        '${tpWins ? 'tradplus' : 'admob'}',
+      );
+      return tpWins ? tradplus : admob;
+    } catch (error) {
+      _log('auction-failed placement=$placement error=$error');
+      return first;
+    }
   }
 
   void _removeEntry(Object placement, LoadedAdCacheEntry entry) {

@@ -7,12 +7,14 @@ class LoadedAdCacheEntry {
   LoadedAdCacheEntry({
     required this.info,
     required this.ad,
+    this.estimatedRevenueMicros = 0,
     required this.cachedAt,
     required this.requestOrder,
   });
 
   final AdInfoBean info;
   final LoadedNetworkAd ad;
+  final double estimatedRevenueMicros;
   Object? adPosId;
   final DateTime cachedAt;
   final int requestOrder;

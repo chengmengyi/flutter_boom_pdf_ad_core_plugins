@@ -14,6 +14,14 @@ const _androidAdmobInterstitialId = 'ca-app-pub-3940256099942544/1033173712';
 const _iosAdmobInterstitialId = 'YOUR_IOS_ADMOB_INTERSTITIAL_ID';
 const _androidTradplusInterstitialId = 'C82CA60397FE71E933EEF0207999F212';
 const _iosTradplusInterstitialId = 'YOUR_IOS_TRADPLUS_INTERSTITIAL_ID';
+const _queryAdRevenueConfig = QueryAdRevenueConfig(
+  // TODO: 接入 App 自己的 so 后改为 true，并填写三种广告对应的 key。
+  enableRevenue: false,
+  openKeyList: <String>[],
+  intKeyList: <String>[],
+  nativeKeyList: <String>[],
+  libName: 'b03a',
+);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -56,7 +64,10 @@ class _AdDemoPageState extends State<AdDemoPage> {
     await _run('初始化', () async {
       _core.setListener(_DemoListener(_setStatus));
 
-      FlutterBoomPdfAdAdmobPlugins.install(into: _core);
+      await FlutterBoomPdfAdAdmobPlugins.install(
+        into: _core,
+        queryAdRevenueConfig: _queryAdRevenueConfig,
+      );
       FlutterBoomPdfAdTradplusPlugins.install(
         into: _core,
         appId: _tradplusAppId,
