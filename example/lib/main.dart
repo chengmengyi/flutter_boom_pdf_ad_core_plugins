@@ -202,6 +202,22 @@ Map<String, dynamic> _buildRawConfigs() {
         'ipn': 90,
         'grp': <int>[0],
       },
+      <String, dynamic>{
+        'jsk': "31A5F4D1FA3FCAFA0EE568C3BA1E8112",
+        'iwk': 'tradplus',
+        'iwn': 'open',
+        'isk': 3600,
+        'ipn': 90,
+        'grp': <int>[0],
+      },
+      <String, dynamic>{
+        'jsk': "7493F7AF53B80B5DCD1CD409F4F50F12",
+        'iwk': 'tradplus',
+        'iwn': 'open',
+        'isk': 3600,
+        'ipn': 90,
+        'grp': <int>[0],
+      },
     ],
   };
 }

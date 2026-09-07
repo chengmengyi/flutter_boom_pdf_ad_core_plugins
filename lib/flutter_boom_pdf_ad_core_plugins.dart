@@ -237,8 +237,28 @@ class FlutterBoomPdfAdCorePlugins {
     final adapter = _requireAdapter(id);
     await adapter.configure(_configurationFor(id));
     await adapter.initialize();
-    _listener?.onNetworkInitialized(id);
-    if (id == _admobNetworkId) _listener?.onAdmobInitialized();
+    final initializationCompleted = adapter.initializationCompleted;
+    if (initializationCompleted != null) {
+      unawaited(
+        initializationCompleted.then<void>(
+          (_) {
+            if (identical(_adapters[id], adapter)) {
+              _notifyNetworkInitialized(id);
+            }
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            _log('network-initialize-failed network=$id error=$error');
+          },
+        ),
+      );
+      return;
+    }
+    _notifyNetworkInitialized(id);
+  }
+
+  void _notifyNetworkInitialized(String networkId) {
+    _listener?.onNetworkInitialized(networkId);
+    if (networkId == _admobNetworkId) _listener?.onAdmobInitialized();
   }
 
   Future<void> initializeAdmob() => initializeNetwork(_admobNetworkId);

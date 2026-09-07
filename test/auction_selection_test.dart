@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -23,6 +24,7 @@ void main() {
   });
 
   tearDown(() async {
+    core.setListener(null);
     await core.dispose();
     core.updateConfigs<Object>(const <Object, List<AdInfoBean>>{});
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -43,6 +45,57 @@ void main() {
     final selected = await core.getCachedEntry('home');
 
     expect(selected?.ad.networkId, 'admob');
+  });
+
+  test('does not block on a deferred SDK completion callback', () async {
+    final sdkCompleted = Completer<void>();
+    final listener = _InitializationListener();
+    core
+      ..setListener(listener)
+      ..registerAdapter(
+        _FakeAdapter(
+          networkId: 'admob',
+          initializationCompleted: sdkCompleted.future,
+        ),
+      );
+
+    await core.initializeNetwork('admob');
+
+    expect(listener.networks, isEmpty);
+    expect(listener.admobInitialized, 0);
+
+    sdkCompleted.complete();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(listener.networks, <String>['admob']);
+    expect(listener.admobInitialized, 1);
+  });
+
+  test('waits for a normal adapter before reporting initialization', () async {
+    final sdkCompleted = Completer<void>();
+    final listener = _InitializationListener();
+    core
+      ..setListener(listener)
+      ..registerAdapter(
+        _FakeAdapter(
+          networkId: 'tradplus',
+          initializeFuture: sdkCompleted.future,
+        ),
+      );
+
+    var returned = false;
+    final initialization = core.initializeNetwork('tradplus').then((_) {
+      returned = true;
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(returned, isFalse);
+    expect(listener.networks, isEmpty);
+
+    sdkCompleted.complete();
+    await initialization;
+
+    expect(listener.networks, <String>['tradplus']);
   });
 
   test('lets TradPlus compare its cache against AdMob revenue', () async {
@@ -101,17 +154,22 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
     required this.networkId,
     this.estimatedRevenueMicros = 0,
     this.auctionWinner,
+    this.initializeFuture,
+    this.initializationCompleted,
   });
 
   @override
   final String networkId;
   final double estimatedRevenueMicros;
   final bool? auctionWinner;
+  final Future<void>? initializeFuture;
+  @override
+  final Future<void>? initializationCompleted;
   double? lastCompetitorRevenueMicros;
   int loadCount = 0;
 
   @override
-  Future<void> initialize() async {}
+  Future<void> initialize() => initializeFuture ?? Future<void>.value();
 
   @override
   bool supports(AdType adType) => true;
@@ -131,6 +189,17 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
       estimatedRevenueMicros: estimatedRevenueMicros,
     );
   }
+}
+
+class _InitializationListener extends FlutterBoomPdfAdListener {
+  final List<String> networks = <String>[];
+  int admobInitialized = 0;
+
+  @override
+  void onNetworkInitialized(String networkId) => networks.add(networkId);
+
+  @override
+  void onAdmobInitialized() => admobInitialized++;
 }
 
 class _FakeAd implements LoadedNetworkAd {

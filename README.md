@@ -119,7 +119,9 @@ Future<void> main() async {
 }
 ```
 
-`initializeNetworks()` 会初始化所有已经注册的 Adapter，AdMob 和 TradPlus 之间没有先后依赖，会并行初始化。如果需要逐个平台控制，可以改为：
+`initializeNetworks()` 会并行启动所有已经注册的 Adapter。TradPlus 必须等待 SDK 初始化成功，所以这个 Future 会等待 TradPlus；AdMob 调用 `MobileAds.instance.initialize()` 后立即返回，不会阻塞广告请求。AdMob SDK 真正初始化完成后，Core 才会回调 `onNetworkInitialized('admob')` 和 `onAdmobInitialized()`。
+
+如果需要逐个平台控制，可以改为：
 
 ```dart
 await ads.initializeNetwork('admob');

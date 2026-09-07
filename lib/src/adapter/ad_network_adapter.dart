@@ -8,6 +8,13 @@ abstract class FlutterBoomPdfAdAdapter {
 
   Future<void> initialize();
 
+  /// Optional SDK-completion signal for adapters whose requests may start
+  /// before the SDK's background initialization has finished.
+  ///
+  /// When this is non-null, Core does not await it from [initializeNetwork],
+  /// but delays the initialized callbacks until it completes.
+  Future<void>? get initializationCompleted => null;
+
   bool supports(AdType adType);
 
   Future<AdLoadResult> load(AdLoadRequest request);
