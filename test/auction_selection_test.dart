@@ -25,6 +25,7 @@ void main() {
 
   tearDown(() async {
     core.setListener(null);
+    core.updateAdRequestTimeoutSeconds(0);
     await core.dispose();
     core.updateConfigs<Object>(const <Object, List<AdInfoBean>>{});
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -118,6 +119,84 @@ void main() {
     expect(tradplus.lastCompetitorRevenueMicros, 2500000);
   });
 
+  test(
+    'compares all cached ads and resolves multiple TradPlus winners',
+    () async {
+      final listener = _BidListener();
+      final admob = _MultiFakeAdapter(
+        networkId: 'admob',
+        revenues: <String, double>{'admob-1': 2000000, 'admob-2': 4000000},
+      );
+      final tradplus = _MultiFakeAdapter(
+        networkId: 'tradplus',
+        auctionResults: <String, bool>{'tp-1': true, 'tp-2': true},
+        revenues: <String, double>{'tp-1': 5000000, 'tp-2': 7000000},
+      );
+      core
+        ..setListener(listener)
+        ..updateAdRequestTimeoutSeconds(1)
+        ..registerAdapter(admob)
+        ..registerAdapter(tradplus)
+        ..updateConfigs<String>(<String, List<AdInfoBean>>{
+          'home': <AdInfoBean>[
+            _infoWithId('admob', 'admob-1'),
+            _infoWithId('admob', 'admob-2'),
+            _infoWithId('tradplus', 'tp-1'),
+            _infoWithId('tradplus', 'tp-2'),
+          ],
+        });
+
+      await core.loadPlacement('home', force: true);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      final selected = await core.getCachedEntry('home');
+
+      expect(selected?.info.adId, 'tp-2');
+      expect(tradplus.competitorPrices, <double>[4000000, 4000000]);
+      expect(tradplus.estimatedPriceRequests, <String>['tp-1', 'tp-2']);
+      expect(listener.starts, <String>[
+        'admob-2:4000000.0',
+        'admob-2:4000000.0',
+      ]);
+      expect(listener.overs, <String>['admob-2:true', 'admob-2:true']);
+      expect(selected?.info.price, 7000000);
+    },
+  );
+
+  test(
+    'resolves price for a single TradPlus winner without extra callbacks',
+    () async {
+      final listener = _BidListener();
+      final admob = _MultiFakeAdapter(
+        networkId: 'admob',
+        revenues: <String, double>{'admob-only': 2000000},
+      );
+      final tradplus = _MultiFakeAdapter(
+        networkId: 'tradplus',
+        auctionResults: <String, bool>{'tp-only': true},
+        revenues: <String, double>{'tp-only': 3500000},
+      );
+      core
+        ..setListener(listener)
+        ..registerAdapter(admob)
+        ..registerAdapter(tradplus)
+        ..updateConfigs<String>(<String, List<AdInfoBean>>{
+          'home': <AdInfoBean>[
+            _infoWithId('admob', 'admob-only'),
+            _infoWithId('tradplus', 'tp-only'),
+          ],
+        });
+
+      await core.loadPlacement('home', force: true);
+      final selected = await core.getCachedEntry('home');
+
+      expect(selected?.info.adId, 'tp-only');
+      expect(selected?.info.price, 3500000);
+      expect(tradplus.estimatedPriceRequests, <String>['tp-only']);
+      expect(listener.starts, <String>['admob-only:2000000.0']);
+      expect(listener.overs, <String>['admob-only:true']);
+    },
+  );
+
   test('reloads only the displayed winner after it is consumed', () async {
     final admob = _FakeAdapter(
       networkId: 'admob',
@@ -146,6 +225,14 @@ AdInfoBean _info(String networkId) => AdInfoBean(
   adId: '$networkId-unit',
   adPlat: networkId,
   adType: 'int',
+  userGroup: <int>[0],
+);
+
+AdInfoBean _infoWithId(String networkId, String adId) => AdInfoBean(
+  adId: adId,
+  adPlat: networkId,
+  adType: 'int',
+  sort: adId.endsWith('-1') ? 2 : 1,
   userGroup: <int>[0],
 );
 
@@ -202,6 +289,106 @@ class _InitializationListener extends FlutterBoomPdfAdListener {
   void onAdmobInitialized() => admobInitialized++;
 }
 
+class _BidListener extends FlutterBoomPdfAdListener {
+  final List<String> starts = <String>[];
+  final List<String> overs = <String>[];
+
+  @override
+  void bidStart(AdInfoBean info) {
+    starts.add('${info.adId}:${info.price}');
+  }
+
+  @override
+  void bidOver(AdInfoBean info, bool tpWins) {
+    overs.add('${info.adId}:$tpWins');
+  }
+}
+
+class _MultiFakeAdapter extends FlutterBoomPdfAdAdapter {
+  _MultiFakeAdapter({
+    required this.networkId,
+    required this.revenues,
+    this.auctionResults = const <String, bool>{},
+  });
+
+  @override
+  final String networkId;
+  final Map<String, double> revenues;
+  final Map<String, bool> auctionResults;
+  final List<double> competitorPrices = <double>[];
+  final List<String> estimatedPriceRequests = <String>[];
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  bool supports(AdType adType) => true;
+
+  @override
+  Future<AdLoadResult> load(AdLoadRequest request) async {
+    final adId = request.info.adId!;
+    await Future<void>.delayed(
+      adId.endsWith('-1')
+          ? const Duration(milliseconds: 1100)
+          : const Duration(milliseconds: 200),
+    );
+    final ad = networkId == 'tradplus'
+        ? _MultiFakeAuctionAd(
+            networkId: networkId,
+            adId: adId,
+            wins: auctionResults[adId] ?? false,
+            estimatedRevenueMicros: revenues[adId] ?? 0,
+            competitorPrices: competitorPrices,
+            estimatedPriceRequests: estimatedPriceRequests,
+          )
+        : _FakeAd(networkId);
+    return AdLoadResult.success(
+      ad,
+      estimatedRevenueMicros: networkId == 'admob' ? revenues[adId] ?? 0 : 0,
+    );
+  }
+}
+
+class _MultiFakeAuctionAd extends _FakeAd
+    implements AdAuctionCandidate, AdEstimatedRevenueCandidate {
+  _MultiFakeAuctionAd({
+    required String networkId,
+    required this.adId,
+    required this.wins,
+    required this.estimatedRevenueMicros,
+    required this.competitorPrices,
+    required this.estimatedPriceRequests,
+  }) : super(networkId);
+
+  final String adId;
+  final bool wins;
+  final double estimatedRevenueMicros;
+  final List<double> competitorPrices;
+  final List<String> estimatedPriceRequests;
+
+  @override
+  Future<bool?> winsAgainst({
+    required double competitorRevenueMicros,
+    AdInfoBean? competitorInfo,
+    void Function(AdInfoBean info)? onBidStart,
+    void Function(AdInfoBean info, bool tpWins)? onBidOver,
+  }) async {
+    competitorPrices.add(competitorRevenueMicros);
+    if (competitorInfo != null) {
+      competitorInfo.price = competitorRevenueMicros;
+      onBidStart?.call(competitorInfo);
+      onBidOver?.call(competitorInfo, wins);
+    }
+    return wins;
+  }
+
+  @override
+  Future<double?> getEstimatedRevenueMicros() async {
+    estimatedPriceRequests.add(adId);
+    return estimatedRevenueMicros;
+  }
+}
+
 class _FakeAd implements LoadedNetworkAd {
   _FakeAd(this.networkId);
 
@@ -245,8 +432,18 @@ class _FakeAuctionAd extends _FakeAd implements AdAuctionCandidate {
   final void Function(double value) onCompared;
 
   @override
-  Future<bool?> winsAgainst({required double competitorRevenueMicros}) async {
+  Future<bool?> winsAgainst({
+    required double competitorRevenueMicros,
+    AdInfoBean? competitorInfo,
+    void Function(AdInfoBean info)? onBidStart,
+    void Function(AdInfoBean info, bool tpWins)? onBidOver,
+  }) async {
     onCompared(competitorRevenueMicros);
+    if (competitorInfo != null) {
+      competitorInfo.price = competitorRevenueMicros;
+      onBidStart?.call(competitorInfo);
+      if (result != null) onBidOver?.call(competitorInfo, result!);
+    }
     return result;
   }
 }

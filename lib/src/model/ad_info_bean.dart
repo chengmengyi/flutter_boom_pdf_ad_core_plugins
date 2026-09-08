@@ -8,9 +8,10 @@ class AdInfoBean {
     this.adType,
     this.sort,
     this.userGroup,
+    this.price = 0,
   });
 
-  AdInfoBean.fromJson(dynamic json) {
+  AdInfoBean.fromJson(dynamic json) : price = 0 {
     adId = json['adId'];
     adPlat = json['adPlat'];
     exportTime = _readInt(json['exportTime']);
@@ -36,6 +37,10 @@ class AdInfoBean {
   int? exportTime;
   int? sort;
   List<int>? userGroup;
+
+  /// Runtime estimated revenue in micros. Adapters populate this after an ad
+  /// loads; it is intentionally excluded from placement JSON parsing/output.
+  double price;
 
   AdType? get parsedAdType => AdTypeX.tryParse(adType);
 

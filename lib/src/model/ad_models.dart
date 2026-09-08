@@ -163,7 +163,18 @@ class AdNetworkEvent {
 /// Optional capability implemented by an ad whose SDK owns the final auction
 /// decision. The competitor value is expressed in revenue micros.
 abstract interface class AdAuctionCandidate {
-  Future<bool?> winsAgainst({required double competitorRevenueMicros});
+  Future<bool?> winsAgainst({
+    required double competitorRevenueMicros,
+    AdInfoBean? competitorInfo,
+    void Function(AdInfoBean info)? onBidStart,
+    void Function(AdInfoBean info, bool tpWins)? onBidOver,
+  });
+}
+
+/// Optional capability for adapters that can resolve a loaded ad's estimated
+/// revenue. Core always uses revenue micros regardless of the SDK's unit.
+abstract interface class AdEstimatedRevenueCandidate {
+  Future<double?> getEstimatedRevenueMicros();
 }
 
 abstract interface class LoadedNetworkAd {

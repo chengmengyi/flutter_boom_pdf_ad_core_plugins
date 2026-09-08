@@ -191,6 +191,7 @@ void configureAdPlacements(FlutterBoomPdfAdCorePlugins ads) {
 | `sort` | 当前版本的请求优先级，数字越大越先请求 |
 | `userGroup` | 用户分组；包含 `0` 表示所有用户可用 |
 | `exportTime` | 广告缓存有效期，单位为秒 |
+| `price` | 加载/比价后填充的运行时预估收益（micros），不属于配置 JSON |
 
 兼容旧配置：`adPlat` 为 `null`、空字符串或者 `google` 时，Core 会路由到 AdMob。
 
@@ -249,11 +250,12 @@ ads.updateSingleFillPlacements(<String>{
 展示前的选择规则：
 
 1. 缓存里只有一个候选广告时直接返回，不发起比价。
-2. 同时存在 AdMob 和 TradPlus 缓存时，Core 取出 AdMob 加载成功时记录的预估收益。
-3. Core 把微单位收益除以 `1000000` 后传给 TradPlus，Android 端调用 `TPOutcome().isTPW(admobPrice, tpAdInfo)`。
-4. `TPOutcome` 返回 `true` 时展示 TradPlus，否则展示 AdMob；比价调用异常时回退到原 `sort` 顺序，避免影响展示。
+2. 多条 AdMob 缓存先按预估收益取最高值；每条 TradPlus 缓存都会分别与这条 AdMob 比较，因此超时后晚到的成功缓存也会参与。
+3. Core 把 AdMob 微单位收益除以 `1000000` 后传给 TradPlus，Android 端调用 `TPOutcome().isTPW(admobPrice, tpAdInfo)`。
+4. 一条或多条 TradPlus 胜出后，Core 会逐条探测其美元 eCPM；只有一条时用于补齐运行时价格，多条时选择价格最高的一条。
+5. `AdInfoBean.price` 是运行时价格，统一使用 micros，不会从配置 JSON 读取，也不会写回 JSON。
 
-AdMob 的预估收益由 `query_ad_revenue` 提供，当前支持 App Open、插屏和原生广告；激励视频和 Banner 暂按 `0` 参与比较。查询收益所需的 `.so` 仍放在业务 App，由 `QueryAdRevenueConfig.libName` 指定，不需要放进 AdMob Adapter。
+AdMob 的预估收益由 `query_ad_revenue` 提供，当前支持 App Open、插屏和原生广告；激励视频和 Banner 在 Release 中按 `0` 参与比较。Debug 模式下，如果查询值为 `0`（包括不支持的类型或查询异常），AdMob Adapter 会从 `123000`、`1240000`、`12500000`、`126000000` micros 中随机取一个并写入缓存；后续所有比价复用该值。查询收益所需的 `.so` 仍放在业务 App，由 `QueryAdRevenueConfig.libName` 指定，不需要放进 AdMob Adapter。
 
 直接传入临时配置：
 
@@ -439,6 +441,16 @@ class AppAdListener extends FlutterBoomPdfAdListener {
   const AppAdListener();
 
   @override
+  void bidStart(AdInfoBean info) {
+    debugPrint('开始比价：${info.adId} / ${info.price} micros');
+  }
+
+  @override
+  void bidOver(AdInfoBean info, bool tpWins) {
+    debugPrint('比价结束：${tpWins ? 'TradPlus' : 'AdMob'} 胜出');
+  }
+
+  @override
   void onNetworkInitialized(String networkId) {
     debugPrint('广告平台初始化完成：$networkId');
   }
@@ -510,6 +522,7 @@ class AppAdListener extends FlutterBoomPdfAdListener {
 - `onAdClicked`、`onAdClosed`
 - `onAdPaidEvent`
 - `onNetworkInitialized`
+- `bidStart`、`bidOver`（TradPlus 与 AdMob 开始/结束比价）
 
 ## 9. 只接入一个平台
 

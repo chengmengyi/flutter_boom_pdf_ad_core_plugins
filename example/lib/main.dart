@@ -6,6 +6,7 @@ import 'package:flutter_boom_pdf_ad_core_plugins/flutter_boom_pdf_ad_core_plugin
 import 'package:flutter_boom_pdf_ad_tradplus_plugins/flutter_boom_pdf_ad_tradplus_plugins.dart';
 
 const _placement = 'pr_new_launch';
+const _loadPlacements = <String>[_placement, 'pr_ban1', 'pr_ban2'];
 
 // TODO: 替换成项目实际使用的 ID。
 // AdMob Application ID 另外配置在 AndroidManifest.xml 和 Info.plist 中。
@@ -96,10 +97,17 @@ class _AdDemoPageState extends State<AdDemoPage> {
         _setStatus('请先初始化广告平台');
         return;
       }
-      final entry = await _core.loadPlacement(_placement, force: true);
-      _setStatus(
-        entry == null ? '两个平台均未加载到广告' : '广告已缓存：${entry.ad.adNetwork}，可以点击显示',
+      final entries = await Future.wait(
+        _loadPlacements.map(
+          (placement) => _core.loadPlacement(placement, force: true),
+        ),
       );
+      final results = <String>[
+        for (var index = 0; index < _loadPlacements.length; index++)
+          '${_loadPlacements[index]}='
+              '${entries[index] == null ? '失败' : '成功'}',
+      ];
+      _setStatus('请求完成：${results.join('，')}');
     });
   }
 
@@ -178,47 +186,159 @@ class _AdDemoPageState extends State<AdDemoPage> {
 
 /// 模拟服务端原始 JSON：两个不同配置 Key 实际属于同一个业务广告位。
 Map<String, dynamic> _buildRawConfigs() {
-  return <String, dynamic>{
-    'pr_new_launch': <Map<String, dynamic>>[
-      <String, dynamic>{
-        'jsk': Platform.isIOS
-            ? _iosAdmobInterstitialId
-            : _androidAdmobInterstitialId,
-        'iwk': 'admob',
-        'iwn': 'int',
-        'isk': 3600,
-        'ipn': 100,
-        'grp': <int>[0],
+  return {
+    "pr_new_launch": [
+      {
+        "jsk": "ca-app-pub-3940256099942544/9257395921",
+        "iwk": "admob",
+        "iwn": "open",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
       },
+      {
+        "jsk": "ca-app-pub-3940256099942544/9257395921",
+        "iwk": "admob",
+        "iwn": "open",
+        "isk": 13800,
+        "ipn": 3,
+        "grp": [
+          0
+        ]
+      },
+      {
+        "jsk": "31A5F4D1FA3FCAFA0EE568C3BA1E8112",
+        "iwk": "tradplus",
+        "iwn": "open",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
+      }
     ],
-    'pr_new_launch2': <Map<String, dynamic>>[
-      <String, dynamic>{
-        'jsk': Platform.isIOS
-            ? _iosTradplusInterstitialId
-            : _androidTradplusInterstitialId,
-        'iwk': 'tradplus',
-        'iwn': 'int',
-        'isk': 3600,
-        'ipn': 90,
-        'grp': <int>[0],
+    "pr_launch": [
+      {
+        "jsk": "ca-app-pub-3940256099942544/9257395921",
+        "iwk": "admob",
+        "iwn": "open",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
       },
-      <String, dynamic>{
-        'jsk': "31A5F4D1FA3FCAFA0EE568C3BA1E8112",
-        'iwk': 'tradplus',
-        'iwn': 'open',
-        'isk': 3600,
-        'ipn': 90,
-        'grp': <int>[0],
+      {
+        "jsk": "ca-app-pub-3940256099942544/9257395921",
+        "iwk": "admob",
+        "iwn": "open",
+        "isk": 13800,
+        "ipn": 3,
+        "grp": [
+          0
+        ]
       },
-      <String, dynamic>{
-        'jsk': "7493F7AF53B80B5DCD1CD409F4F50F12",
-        'iwk': 'tradplus',
-        'iwn': 'open',
-        'isk': 3600,
-        'ipn': 90,
-        'grp': <int>[0],
-      },
+      {
+        "jsk": "7493F7AF53B80B5DCD1CD409F4F50F12",
+        "iwk": "tradplus",
+        "iwn": "open",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
+      }
     ],
+    "pr_ban1": [
+      {
+        "jsk": "ca-app-pub-3940256099942544/2247696110",
+        "iwk": "admob",
+        "iwn": "nat",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
+      },
+      {
+        "jsk": "0098184D8C40452444AD164B741EC812",
+        "iwk": "tradplus",
+        "iwn": "nat",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
+      }
+    ],
+    "pr_ban2": [
+      {
+        "jsk": "ca-app-pub-3940256099942544/2247696110",
+        "iwk": "admob",
+        "iwn": "nat",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
+      },
+      {
+        "jsk": "7493F7AF53B80B5DCD1CD409F4F50F12",
+        "iwk": "tradplus",
+        "iwn": "nat",
+        "isk": 13800,
+        "ipn": 3,
+        "grp": [
+          0
+        ]
+      }
+    ],
+    "pr_user_use": [
+      {
+        "jsk": "ca-app-pub-3940256099942544/1033173712",
+        "iwk": "admob",
+        "iwn": "int",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
+      },
+      {
+        "jsk": "C82CA60397FE71E933EEF0207999F212",
+        "iwk": "tradplus",
+        "iwn": "int",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
+      }
+    ],
+    "pr_exit": [
+      {
+        "jsk": "ca-app-pub-3940256099942544/9257395921",
+        "iwk": "admob",
+        "iwn": "open",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
+      },
+      {
+        "jsk": "C6CAC4CDF2A0F7501F0DEC7A76FF1D12",
+        "iwk": "tradplus",
+        "iwn": "open",
+        "isk": 13800,
+        "ipn": 4,
+        "grp": [
+          0
+        ]
+      }
+    ]
   };
 }
 
@@ -251,7 +371,7 @@ String? _logicalPlacementForConfigKey(String configKey) {
     case 'pr_launch2':
       return 'pr_launch';
     default:
-      return null;
+      return configKey;
   }
 }
 
@@ -259,6 +379,16 @@ class _DemoListener extends FlutterBoomPdfAdListener {
   const _DemoListener(this.onStatus);
 
   final ValueChanged<String> onStatus;
+
+  @override
+  void bidStart(AdInfoBean info) {
+    onStatus('开始比价：${info.adId}，price=${info.price} micros');
+  }
+
+  @override
+  void bidOver(AdInfoBean info, bool tpWins) {
+    onStatus('比价结束：${tpWins ? 'TradPlus' : 'AdMob'} 胜出');
+  }
 
   @override
   void onNetworkInitialized(String networkId) {

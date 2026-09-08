@@ -27,6 +27,8 @@ typedef FlutterPdfAdListener = FlutterBoomPdfAdListener;
 abstract class FlutterBoomPdfAdListener {
   const FlutterBoomPdfAdListener();
 
+  void bidStart(AdInfoBean info) {}
+  void bidOver(AdInfoBean info, bool tpWins) {}
   void onAdmobInitialized() {}
   void onNetworkInitialized(String networkId) {}
   void onUserGroupResolved(int userGroup) {}
@@ -826,6 +828,7 @@ class FlutterBoomPdfAdCorePlugins {
         final indexedConfig = networkConfigs[index];
         final info = indexedConfig.info;
         final adapter = _adapters[info.normalizedNetworkId];
+        _debugAdLifecycleLog('start load', placement, info);
         _listener?.onAdRequestStart(placement, info);
         final delay = _requestFallbackDelay;
         if (delay != null &&
@@ -898,6 +901,7 @@ class FlutterBoomPdfAdCorePlugins {
           }
           return;
         }
+        info.price = result.estimatedRevenueMicros;
         final entry = LoadedAdCacheEntry(
           info: info,
           ad: ad,
@@ -1182,41 +1186,104 @@ class FlutterBoomPdfAdCorePlugins {
 
   Future<LoadedAdCacheEntry?> _selectCachedEntry(Object placement) async {
     final first = _firstEntry(placement);
-    if (first == null || _adapters.length <= 1) return first;
+    if (first == null) return null;
 
     final entries = _cache[placement];
     if (entries == null || entries.length <= 1) return first;
 
-    LoadedAdCacheEntry? admob;
-    LoadedAdCacheEntry? tradplus;
+    final admobEntries = <LoadedAdCacheEntry>[];
+    final tradplusEntries = <LoadedAdCacheEntry>[];
     for (final entry in entries) {
-      if (admob == null && entry.ad.networkId == _admobNetworkId) {
-        admob = entry;
-      } else if (tradplus == null && entry.ad.networkId == 'tradplus') {
-        tradplus = entry;
+      if (entry.ad.networkId == _admobNetworkId) {
+        entry.info.price = entry.estimatedRevenueMicros;
+        admobEntries.add(entry);
+      } else if (entry.ad.networkId == 'tradplus') {
+        tradplusEntries.add(entry);
       }
-      if (admob != null && tradplus != null) break;
     }
-    if (admob == null || tradplus == null) return first;
 
-    final candidate = tradplus.ad;
-    if (candidate is! AdAuctionCandidate) return first;
-    final auctionCandidate = candidate as AdAuctionCandidate;
-    try {
-      final tpWins = await auctionCandidate.winsAgainst(
-        competitorRevenueMicros: admob.estimatedRevenueMicros,
-      );
-      if (tpWins == null) return first;
-      _log(
-        'auction placement=$placement admobMicros='
-        '${admob.estimatedRevenueMicros} winner='
-        '${tpWins ? 'tradplus' : 'admob'}',
-      );
-      return tpWins ? tradplus : admob;
-    } catch (error) {
-      _log('auction-failed placement=$placement error=$error');
-      return first;
+    final bestAdmob = _highestCachedRevenue(admobEntries);
+    if (tradplusEntries.isEmpty) return bestAdmob ?? first;
+    if (bestAdmob == null) {
+      return await _highestEstimatedRevenue(tradplusEntries) ?? first;
     }
+
+    final tradplusWinners = <LoadedAdCacheEntry>[];
+    for (final tradplus in tradplusEntries) {
+      final candidate = tradplus.ad;
+      if (candidate is! AdAuctionCandidate) continue;
+      final auctionCandidate = candidate as AdAuctionCandidate;
+      try {
+        final tpWins = await auctionCandidate.winsAgainst(
+          competitorRevenueMicros: bestAdmob.estimatedRevenueMicros,
+          competitorInfo: bestAdmob.info,
+          onBidStart: (info) => _listener?.bidStart(info),
+          onBidOver: (info, tpWins) => _listener?.bidOver(info, tpWins),
+        );
+        if (tpWins == true) tradplusWinners.add(tradplus);
+        _log(
+          'auction placement=$placement admobMicros='
+          '${bestAdmob.estimatedRevenueMicros} tradplusAdId='
+          '${tradplus.info.adId} winner='
+          '${tpWins == null
+              ? 'unknown'
+              : tpWins
+              ? 'tradplus'
+              : 'admob'}',
+        );
+      } catch (error) {
+        _log(
+          'auction-failed placement=$placement tradplusAdId='
+          '${tradplus.info.adId} error=$error',
+        );
+      }
+    }
+    if (tradplusWinners.isEmpty) return bestAdmob;
+
+    final winner =
+        await _highestEstimatedRevenue(tradplusWinners) ??
+        tradplusWinners.first;
+    _log(
+      'tradplus-auction placement=$placement candidates='
+      '${tradplusWinners.length} winnerAdId=${winner.info.adId}'
+      ' winnerMicros=${winner.info.price}',
+    );
+    return winner;
+  }
+
+  LoadedAdCacheEntry? _highestCachedRevenue(List<LoadedAdCacheEntry> entries) {
+    LoadedAdCacheEntry? winner;
+    for (final entry in entries) {
+      if (winner == null ||
+          entry.estimatedRevenueMicros > winner.estimatedRevenueMicros) {
+        winner = entry;
+      }
+    }
+    return winner;
+  }
+
+  Future<LoadedAdCacheEntry?> _highestEstimatedRevenue(
+    List<LoadedAdCacheEntry> entries,
+  ) async {
+    LoadedAdCacheEntry? winner;
+    var winnerMicros = double.negativeInfinity;
+    for (final entry in entries) {
+      final candidate = entry.ad;
+      if (candidate is! AdEstimatedRevenueCandidate) continue;
+      final revenueCandidate = candidate as AdEstimatedRevenueCandidate;
+      try {
+        final value = await revenueCandidate.getEstimatedRevenueMicros();
+        if (value == null || !value.isFinite || value < 0) continue;
+        entry.info.price = value;
+        if (winner == null || value > winnerMicros) {
+          winner = entry;
+          winnerMicros = value;
+        }
+      } catch (error) {
+        _log('estimated-revenue-failed adId=${entry.info.adId} error=$error');
+      }
+    }
+    return winner;
   }
 
   void _removeEntry(Object placement, LoadedAdCacheEntry entry) {
