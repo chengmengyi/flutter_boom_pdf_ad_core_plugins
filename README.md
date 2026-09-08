@@ -118,6 +118,17 @@ Future<void> main() async {
 
 `initializeNetworks()` 会并行启动所有已经注册的 Adapter。TradPlus 必须等待 SDK 初始化成功，所以这个 Future 会等待 TradPlus；AdMob 调用 `MobileAds.instance.initialize()` 后立即返回，不会阻塞广告请求。AdMob SDK 真正初始化完成后，Core 才会回调 `onNetworkInitialized('admob')` 和 `onAdmobInitialized()`。
 
+Core 会按平台复用同一个初始化任务，并在每个平台自己的加载队列前等待该任务。需要在启动阶段立即请求广告时，不要先单独 `await initializeNetworks()`，而是让初始化和预加载同时启动：
+
+```dart
+final initializeFuture = ads.initializeNetworks();
+final preloadFuture = ads.preloadAll();
+
+await Future.wait<void>([initializeFuture, preloadFuture]);
+```
+
+此时 AdMob 的初始化任务立即允许加载，所以会马上开始请求；TradPlus 的加载队列会等待 `tp_initFinish` 成功后才请求。两个平台仍属于同一次 placement 加载，不会重复请求 AdMob。同一平台被多个 placement 同时使用时，也只会初始化一次。
+
 调用 `handleUmpConsent()` 后，Core 会保存 AdMob 的 `canRequestAds` 状态。若为 `false`，Core 会清除已有 AdMob 缓存，并在 `initializeNetworks()`、`loadPlacement()` 和 `preloadAll()` 中跳过 AdMob；同一广告位里的 TradPlus 等其他平台不会受影响。未调用 UMP 的项目保持原行为。隐私状态可能变化时，调用 `canRequestAds()` 可刷新这个门控状态；状态恢复允许后，再调用 `initializeNetwork('admob')` 并重新请求广告。
 
 如果需要逐个平台控制，可以改为：

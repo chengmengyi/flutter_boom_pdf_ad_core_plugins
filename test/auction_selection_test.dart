@@ -99,6 +99,38 @@ void main() {
     expect(listener.networks, <String>['tradplus']);
   });
 
+  test(
+    'loads AdMob immediately and waits for TradPlus initialization',
+    () async {
+      final tradplusInitialized = Completer<void>();
+      final admob = _FakeAdapter(networkId: 'admob');
+      final tradplus = _FakeAdapter(
+        networkId: 'tradplus',
+        initializeFuture: tradplusInitialized.future,
+      );
+      core
+        ..registerAdapter(admob)
+        ..registerAdapter(tradplus)
+        ..updateConfigs<String>(<String, List<AdInfoBean>>{
+          'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
+        });
+
+      final initialization = core.initializeNetworks();
+      final loading = core.loadPlacement('home', force: true);
+      for (var attempt = 0; attempt < 10 && admob.loadCount == 0; attempt++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      expect(admob.loadCount, 1);
+      expect(tradplus.loadCount, 0);
+
+      tradplusInitialized.complete();
+      await Future.wait<Object?>(<Future<Object?>>[initialization, loading]);
+
+      expect(tradplus.loadCount, 1);
+    },
+  );
+
   test('UMP denial gates AdMob but keeps TradPlus available', () async {
     final admob = _FakeAdapter(networkId: 'admob', umpCanRequestAds: false);
     final tradplus = _FakeAdapter(networkId: 'tradplus');

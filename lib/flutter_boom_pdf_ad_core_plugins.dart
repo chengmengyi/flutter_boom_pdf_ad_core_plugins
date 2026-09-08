@@ -157,6 +157,7 @@ class FlutterBoomPdfAdCorePlugins {
   };
 
   final Map<String, FlutterBoomPdfAdAdapter> _adapters = {};
+  final Map<String, Future<void>> _networkInitializationTasks = {};
   final Map<String, Map<String, Object?>> _networkOptions = {};
   final Map<Object, List<AdInfoBean>> _defaultConfigs = {};
   final Map<Object, List<AdInfoBean>> _facebookConfigs = {};
@@ -194,6 +195,7 @@ class FlutterBoomPdfAdCorePlugins {
     final id = _normalizeNetworkId(adapter.networkId);
     final previous = _adapters[id];
     if (previous != null && !identical(previous, adapter)) {
+      _networkInitializationTasks.remove(id);
       unawaited(previous.dispose());
     }
     _adapters[id] = adapter;
@@ -203,6 +205,7 @@ class FlutterBoomPdfAdCorePlugins {
 
   Future<void> unregisterAdapter(String networkId) async {
     final id = _normalizeNetworkId(networkId);
+    _networkInitializationTasks.remove(id);
     final adapter = _adapters.remove(id);
     if (adapter == null) return;
     final placements = _cache.keys.toList(growable: false);
@@ -242,18 +245,51 @@ class FlutterBoomPdfAdCorePlugins {
   }
 
   Future<void> initializeNetworks() async {
-    await Future.wait(_adapters.keys.map(initializeNetwork));
+    await Future.wait(
+      _adapters.keys.toList(growable: false).map(initializeNetwork),
+    );
   }
 
-  Future<void> initializeNetwork(String networkId) async {
+  Future<void> initializeNetwork(String networkId) {
     final id = _normalizeNetworkId(networkId);
     if (!_networkCanRequestAds(id)) {
       _log(
         'network-initialize-skipped network=$id reason=ump-cannot-request-ads',
       );
-      return;
+      return Future<void>.value();
     }
     final adapter = _requireAdapter(id);
+    final existing = _networkInitializationTasks[id];
+    if (existing != null) return existing;
+
+    final completer = Completer<void>();
+    final task = completer.future;
+    _networkInitializationTasks[id] = task;
+    unawaited(_runNetworkInitialization(id, adapter, completer, task));
+    return task;
+  }
+
+  Future<void> _runNetworkInitialization(
+    String id,
+    FlutterBoomPdfAdAdapter adapter,
+    Completer<void> completer,
+    Future<void> task,
+  ) async {
+    try {
+      await _initializeNetwork(id, adapter);
+      completer.complete();
+    } catch (error, stackTrace) {
+      if (identical(_networkInitializationTasks[id], task)) {
+        _networkInitializationTasks.remove(id);
+      }
+      completer.completeError(error, stackTrace);
+    }
+  }
+
+  Future<void> _initializeNetwork(
+    String id,
+    FlutterBoomPdfAdAdapter adapter,
+  ) async {
     await adapter.configure(_configurationFor(id));
     await adapter.initialize();
     final initializationCompleted = adapter.initializationCompleted;
@@ -815,6 +851,7 @@ class FlutterBoomPdfAdCorePlugins {
       await adapter.dispose();
     }
     _adapters.clear();
+    _networkInitializationTasks.clear();
     _admobCanRequestAds = null;
   }
 
@@ -846,6 +883,25 @@ class FlutterBoomPdfAdCorePlugins {
     Future<LoadedAdCacheEntry?> loadNetwork(
       List<_IndexedAdConfig> networkConfigs,
     ) async {
+      final networkId = networkConfigs.first.info.normalizedNetworkId;
+      if (_adapters.containsKey(networkId)) {
+        try {
+          await initializeNetwork(networkId);
+        } catch (error) {
+          final info = networkConfigs.first.info;
+          final reason = 'network-initialize-failed:$error';
+          _debugAdLifecycleLog('load fail', placement, info, reason: reason);
+          _listener?.onAdRequestFailure(
+            placement,
+            info,
+            reason,
+            networkId,
+            networkId,
+            0,
+          );
+          return null;
+        }
+      }
       final completer = Completer<LoadedAdCacheEntry?>();
       final started = <int>{};
       final completed = <int>{};
