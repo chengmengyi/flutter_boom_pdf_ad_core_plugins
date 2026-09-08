@@ -343,13 +343,32 @@ class _DemoListener extends FlutterBoomPdfAdListener {
   final ValueChanged<String> onStatus;
 
   @override
-  void bidStart(AdInfoBean info) {
-    onStatus('开始比价：${info.adId}，price=${info.price} micros');
+  void bidStart(
+    Object placement,
+    Object adPosId,
+    String adNetwork,
+    AdInfoBean admobInfo,
+    AdInfoBean tradplusInfo,
+  ) {
+    onStatus(
+      '开始比价：$placement/$adPosId/$adNetwork，'
+      'AdMob=${admobInfo.price} micros，'
+      'TradPlus=${tradplusInfo.price} micros',
+    );
   }
 
   @override
-  void bidOver(AdInfoBean info, bool tpWins) {
-    onStatus('比价结束：${tpWins ? 'TradPlus' : 'AdMob'} 胜出');
+  void bidOver(
+    Object placement,
+    Object adPosId,
+    String adNetwork,
+    AdInfoBean winnerInfo,
+  ) {
+    onStatus(
+      '比价结束：$placement/$adPosId/$adNetwork，'
+      '${winnerInfo.adPlat} 胜出，'
+      'price=${winnerInfo.price} micros',
+    );
   }
 
   @override

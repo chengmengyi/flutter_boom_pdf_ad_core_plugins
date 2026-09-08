@@ -99,6 +99,53 @@ void main() {
     expect(listener.networks, <String>['tradplus']);
   });
 
+  test('UMP denial gates AdMob but keeps TradPlus available', () async {
+    final admob = _FakeAdapter(networkId: 'admob', umpCanRequestAds: false);
+    final tradplus = _FakeAdapter(networkId: 'tradplus');
+    core
+      ..registerAdapter(admob)
+      ..registerAdapter(tradplus)
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
+      });
+
+    final consent = await core.handleUmpConsent();
+    await core.initializeNetworks();
+    await core.loadPlacement('home', force: true);
+
+    expect(consent.canRequestAds, isFalse);
+    expect(admob.initializeCount, 0);
+    expect(admob.loadCount, 0);
+    expect(tradplus.initializeCount, 1);
+    expect(tradplus.loadCount, 1);
+    expect((await core.getCachedEntry('home'))?.ad.networkId, 'tradplus');
+  });
+
+  test(
+    'does not report a late AdMob initialization after UMP denial',
+    () async {
+      final sdkCompleted = Completer<void>();
+      final listener = _InitializationListener();
+      core
+        ..setListener(listener)
+        ..registerAdapter(
+          _FakeAdapter(
+            networkId: 'admob',
+            umpCanRequestAds: false,
+            initializationCompleted: sdkCompleted.future,
+          ),
+        );
+
+      await core.initializeNetwork('admob');
+      await core.handleUmpConsent();
+      sdkCompleted.complete();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(listener.networks, isEmpty);
+      expect(listener.admobInitialized, 0);
+    },
+  );
+
   test('lets TradPlus compare its cache against AdMob revenue', () async {
     final admob = _FakeAdapter(
       networkId: 'admob',
@@ -148,16 +195,22 @@ void main() {
 
       await core.loadPlacement('home', force: true);
       await Future<void>.delayed(const Duration(milliseconds: 250));
-      final selected = await core.getCachedEntry('home');
+      final selected = await core.getCachedEntry(
+        'home',
+        adPosId: 'auction-pos',
+      );
 
       expect(selected?.info.adId, 'tp-2');
       expect(tradplus.competitorPrices, <double>[4000000, 4000000]);
       expect(tradplus.estimatedPriceRequests, <String>['tp-1', 'tp-2']);
       expect(listener.starts, <String>[
-        'admob-2:4000000.0',
-        'admob-2:4000000.0',
+        'home:auction-pos:tradplus|admob-2:4000000.0|tp-1:5000000.0',
+        'home:auction-pos:tradplus|admob-2:4000000.0|tp-2:7000000.0',
       ]);
-      expect(listener.overs, <String>['admob-2:true', 'admob-2:true']);
+      expect(listener.overs, <String>[
+        'home:auction-pos:tradplus|tp-1:5000000.0',
+        'home:auction-pos:tradplus|tp-2:7000000.0',
+      ]);
       expect(selected?.info.price, 7000000);
     },
   );
@@ -187,15 +240,54 @@ void main() {
         });
 
       await core.loadPlacement('home', force: true);
-      final selected = await core.getCachedEntry('home');
+      final selected = await core.getCachedEntry(
+        'home',
+        adPosId: 'auction-pos',
+      );
 
       expect(selected?.info.adId, 'tp-only');
       expect(selected?.info.price, 3500000);
       expect(tradplus.estimatedPriceRequests, <String>['tp-only']);
-      expect(listener.starts, <String>['admob-only:2000000.0']);
-      expect(listener.overs, <String>['admob-only:true']);
+      expect(listener.starts, <String>[
+        'home:auction-pos:tradplus|'
+            'admob-only:2000000.0|tp-only:3500000.0',
+      ]);
+      expect(listener.overs, <String>[
+        'home:auction-pos:tradplus|tp-only:3500000.0',
+      ]);
     },
   );
+
+  test('bidOver reports the winning AdMob network and info', () async {
+    final listener = _BidListener();
+    final admob = _MultiFakeAdapter(
+      networkId: 'admob',
+      revenues: <String, double>{'admob-2': 6000000},
+    );
+    final tradplus = _MultiFakeAdapter(
+      networkId: 'tradplus',
+      auctionResults: <String, bool>{'tp-2': false},
+      revenues: <String, double>{'tp-2': 4000000},
+    );
+    core
+      ..setListener(listener)
+      ..registerAdapter(admob)
+      ..registerAdapter(tradplus)
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[
+          _infoWithId('admob', 'admob-2'),
+          _infoWithId('tradplus', 'tp-2'),
+        ],
+      });
+
+    await core.loadPlacement('home', force: true);
+    final selected = await core.getCachedEntry('home', adPosId: 'auction-pos');
+
+    expect(selected?.info.adId, 'admob-2');
+    expect(listener.overs, <String>[
+      'home:auction-pos:admob|admob-2:6000000.0',
+    ]);
+  });
 
   test('reloads only the displayed winner after it is consumed', () async {
     final admob = _FakeAdapter(
@@ -243,6 +335,7 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
     this.auctionWinner,
     this.initializeFuture,
     this.initializationCompleted,
+    this.umpCanRequestAds = true,
   });
 
   @override
@@ -250,13 +343,36 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
   final double estimatedRevenueMicros;
   final bool? auctionWinner;
   final Future<void>? initializeFuture;
+  final bool umpCanRequestAds;
   @override
   final Future<void>? initializationCompleted;
   double? lastCompetitorRevenueMicros;
+  int initializeCount = 0;
   int loadCount = 0;
 
   @override
-  Future<void> initialize() => initializeFuture ?? Future<void>.value();
+  Future<void> initialize() {
+    initializeCount++;
+    return initializeFuture ?? Future<void>.value();
+  }
+
+  @override
+  Future<UmpConsentResult> handleUmpConsent({
+    required String countryCode,
+    required bool requiresCmpByLocale,
+    Object? params,
+    bool loadAndShowFormIfRequired = true,
+    bool fetchStatusSnapshot = false,
+  }) async => UmpConsentResult(
+    canRequestAds: umpCanRequestAds,
+    countryCode: countryCode,
+    requiresCmpByLocale: requiresCmpByLocale,
+    consentStatus: umpCanRequestAds
+        ? ConsentStatus.obtained
+        : ConsentStatus.required,
+    privacyOptionsRequirementStatus:
+        PrivacyOptionsRequirementStatus.notRequired,
+  );
 
   @override
   bool supports(AdType adType) => true;
@@ -294,13 +410,31 @@ class _BidListener extends FlutterBoomPdfAdListener {
   final List<String> overs = <String>[];
 
   @override
-  void bidStart(AdInfoBean info) {
-    starts.add('${info.adId}:${info.price}');
+  void bidStart(
+    Object placement,
+    Object adPosId,
+    String adNetwork,
+    AdInfoBean admobInfo,
+    AdInfoBean tradplusInfo,
+  ) {
+    starts.add(
+      '$placement:$adPosId:$adNetwork|'
+      '${admobInfo.adId}:${admobInfo.price}|'
+      '${tradplusInfo.adId}:${tradplusInfo.price}',
+    );
   }
 
   @override
-  void bidOver(AdInfoBean info, bool tpWins) {
-    overs.add('${info.adId}:$tpWins');
+  void bidOver(
+    Object placement,
+    Object adPosId,
+    String adNetwork,
+    AdInfoBean winnerInfo,
+  ) {
+    overs.add(
+      '$placement:$adPosId:$adNetwork|'
+      '${winnerInfo.adId}:${winnerInfo.price}',
+    );
   }
 }
 
@@ -365,27 +499,32 @@ class _MultiFakeAuctionAd extends _FakeAd
   final double estimatedRevenueMicros;
   final List<double> competitorPrices;
   final List<String> estimatedPriceRequests;
+  double? _cachedEstimatedRevenueMicros;
 
   @override
   Future<bool?> winsAgainst({
     required double competitorRevenueMicros,
     AdInfoBean? competitorInfo,
-    void Function(AdInfoBean info)? onBidStart,
-    void Function(AdInfoBean info, bool tpWins)? onBidOver,
+    AdInfoBean? candidateInfo,
+    void Function(AdInfoBean admobInfo, AdInfoBean tradplusInfo)? onBidStart,
+    void Function(AdInfoBean winnerInfo)? onBidOver,
   }) async {
     competitorPrices.add(competitorRevenueMicros);
-    if (competitorInfo != null) {
+    if (competitorInfo != null && candidateInfo != null) {
       competitorInfo.price = competitorRevenueMicros;
-      onBidStart?.call(competitorInfo);
-      onBidOver?.call(competitorInfo, wins);
+      candidateInfo.price = await getEstimatedRevenueMicros() ?? 0;
+      onBidStart?.call(competitorInfo, candidateInfo);
+      onBidOver?.call(wins ? candidateInfo : competitorInfo);
     }
     return wins;
   }
 
   @override
   Future<double?> getEstimatedRevenueMicros() async {
+    final cached = _cachedEstimatedRevenueMicros;
+    if (cached != null) return cached;
     estimatedPriceRequests.add(adId);
-    return estimatedRevenueMicros;
+    return _cachedEstimatedRevenueMicros = estimatedRevenueMicros;
   }
 }
 
@@ -435,14 +574,17 @@ class _FakeAuctionAd extends _FakeAd implements AdAuctionCandidate {
   Future<bool?> winsAgainst({
     required double competitorRevenueMicros,
     AdInfoBean? competitorInfo,
-    void Function(AdInfoBean info)? onBidStart,
-    void Function(AdInfoBean info, bool tpWins)? onBidOver,
+    AdInfoBean? candidateInfo,
+    void Function(AdInfoBean admobInfo, AdInfoBean tradplusInfo)? onBidStart,
+    void Function(AdInfoBean winnerInfo)? onBidOver,
   }) async {
     onCompared(competitorRevenueMicros);
-    if (competitorInfo != null) {
+    if (competitorInfo != null && candidateInfo != null) {
       competitorInfo.price = competitorRevenueMicros;
-      onBidStart?.call(competitorInfo);
-      if (result != null) onBidOver?.call(competitorInfo, result!);
+      onBidStart?.call(competitorInfo, candidateInfo);
+      if (result != null) {
+        onBidOver?.call(result! ? candidateInfo : competitorInfo);
+      }
     }
     return result;
   }

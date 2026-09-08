@@ -161,13 +161,15 @@ class AdNetworkEvent {
 }
 
 /// Optional capability implemented by an ad whose SDK owns the final auction
-/// decision. The competitor value is expressed in revenue micros.
+/// decision. The competitor value and both callback prices are expressed in
+/// revenue micros.
 abstract interface class AdAuctionCandidate {
   Future<bool?> winsAgainst({
     required double competitorRevenueMicros,
     AdInfoBean? competitorInfo,
-    void Function(AdInfoBean info)? onBidStart,
-    void Function(AdInfoBean info, bool tpWins)? onBidOver,
+    AdInfoBean? candidateInfo,
+    void Function(AdInfoBean admobInfo, AdInfoBean tradplusInfo)? onBidStart,
+    void Function(AdInfoBean winnerInfo)? onBidOver,
   });
 }
 

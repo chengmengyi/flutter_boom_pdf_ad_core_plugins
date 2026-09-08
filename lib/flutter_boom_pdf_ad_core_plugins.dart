@@ -19,16 +19,26 @@ export 'src/model/ad_info_bean.dart';
 export 'src/model/ad_models.dart';
 export 'src/model/ad_type.dart';
 
-typedef FengKongLogic = bool Function();
-
-typedef FlutterPdfAdPlugins = FlutterBoomPdfAdCorePlugins;
-typedef FlutterPdfAdListener = FlutterBoomPdfAdListener;
-
 abstract class FlutterBoomPdfAdListener {
   const FlutterBoomPdfAdListener();
 
-  void bidStart(AdInfoBean info) {}
-  void bidOver(AdInfoBean info, bool tpWins) {}
+  /// Called before each AdMob-versus-TradPlus comparison. Both prices are
+  /// populated in revenue micros.
+  void bidStart(
+    Object placement,
+    Object adPosId,
+    String adNetwork,
+    AdInfoBean admobInfo,
+    AdInfoBean tradplusInfo,
+  ) {}
+
+  /// Called after that comparison with the winning ad configuration.
+  void bidOver(
+    Object placement,
+    Object adPosId,
+    String adNetwork,
+    AdInfoBean winnerInfo,
+  ) {}
   void onAdmobInitialized() {}
   void onNetworkInitialized(String networkId) {}
   void onUserGroupResolved(int userGroup) {}
@@ -172,6 +182,7 @@ class FlutterBoomPdfAdCorePlugins {
       AdChoicesPlacement.bottomLeftCorner;
   double _debugMinRevenue = 0.008;
   double _debugMaxRevenue = 0.02;
+  bool? _admobCanRequestAds;
 
   Iterable<String> get registeredNetworkIds =>
       List<String>.unmodifiable(_adapters.keys);
@@ -236,6 +247,12 @@ class FlutterBoomPdfAdCorePlugins {
 
   Future<void> initializeNetwork(String networkId) async {
     final id = _normalizeNetworkId(networkId);
+    if (!_networkCanRequestAds(id)) {
+      _log(
+        'network-initialize-skipped network=$id reason=ump-cannot-request-ads',
+      );
+      return;
+    }
     final adapter = _requireAdapter(id);
     await adapter.configure(_configurationFor(id));
     await adapter.initialize();
@@ -244,7 +261,8 @@ class FlutterBoomPdfAdCorePlugins {
       unawaited(
         initializationCompleted.then<void>(
           (_) {
-            if (identical(_adapters[id], adapter)) {
+            if (identical(_adapters[id], adapter) &&
+                _networkCanRequestAds(id)) {
               _notifyNetworkInitialized(id);
             }
           },
@@ -450,13 +468,23 @@ class FlutterBoomPdfAdCorePlugins {
       loadAndShowFormIfRequired: loadAndShowFormIfRequired,
       fetchStatusSnapshot: fetchStatusSnapshot,
     );
+    _admobCanRequestAds = result.canRequestAds;
+    if (!result.canRequestAds) {
+      await _clearNetworkCache(_admobNetworkId);
+    }
     _listener?.onUmpConsentCanRequestAds(result.canRequestAds);
     _listener?.onUmpConsentFlowComplete(result);
     return result;
   }
 
-  Future<bool> canRequestAds() =>
-      _requireAdapter(_admobNetworkId).canRequestAds();
+  Future<bool> canRequestAds() async {
+    final canRequest = await _requireAdapter(_admobNetworkId).canRequestAds();
+    _admobCanRequestAds = canRequest;
+    if (!canRequest) {
+      await _clearNetworkCache(_admobNetworkId);
+    }
+    return canRequest;
+  }
 
   Future<PrivacyOptionsRequirementStatus>
   getPrivacyOptionsRequirementStatus() =>
@@ -582,10 +610,13 @@ class FlutterBoomPdfAdCorePlugins {
     );
   }
 
-  Future<LoadedAdCacheEntry?> getCachedEntry<K>(K placement) async {
+  Future<LoadedAdCacheEntry?> getCachedEntry<K>(
+    K placement, {
+    Object? adPosId,
+  }) async {
     final key = placement as Object;
     await _evictExpired(key);
-    return _selectCachedEntry(key);
+    return _selectCachedEntry(key, adPosId: adPosId);
   }
 
   Future<Object?> getCachedAd<K>(K placement) async {
@@ -609,7 +640,7 @@ class FlutterBoomPdfAdCorePlugins {
     required Object adPosId,
   }) async {
     final key = placement as Object;
-    final entry = await getCachedEntry(key);
+    final entry = await getCachedEntry(key, adPosId: adPosId);
     if (entry == null || !entry.ad.supportsWidget) {
       return null;
     }
@@ -630,7 +661,7 @@ class FlutterBoomPdfAdCorePlugins {
     Duration disposeDelay = const Duration(seconds: 2),
   }) async {
     final key = placement as Object;
-    var entry = await getCachedEntry(key);
+    var entry = await getCachedEntry(key, adPosId: adPosId);
     if (entry == null && loadIfNeeded) {
       entry = await loadPlacement<Object>(key, force: true);
     }
@@ -667,7 +698,7 @@ class FlutterBoomPdfAdCorePlugins {
     if (_showingPlacements.contains(key)) {
       return false;
     }
-    final entry = await getCachedEntry(key);
+    final entry = await getCachedEntry(key, adPosId: adPosId);
     if (entry == null) {
       if (!_skipReloadAfterClosePlacements.contains(key)) {
         unawaited(loadPlacement<Object>(key));
@@ -784,6 +815,7 @@ class FlutterBoomPdfAdCorePlugins {
       await adapter.dispose();
     }
     _adapters.clear();
+    _admobCanRequestAds = null;
   }
 
   Future<LoadedAdCacheEntry?> _loadPlacementInternal(
@@ -889,6 +921,30 @@ class FlutterBoomPdfAdCorePlugins {
             placement,
             info,
             result.failureReason ?? 'unknown',
+            result.adNetwork ?? info.normalizedNetworkId,
+            result.adSourceName ?? result.adNetwork ?? info.normalizedNetworkId,
+            seconds,
+          );
+          if (index + 1 < networkConfigs.length) {
+            unawaited(start(index + 1));
+          }
+          if (allDone() && !completer.isCompleted) {
+            completer.complete(null);
+          }
+          return;
+        }
+        if (!_networkCanRequestAds(info.normalizedNetworkId)) {
+          await ad.dispose();
+          _debugAdLifecycleLog(
+            'load fail',
+            placement,
+            info,
+            reason: 'ump-cannot-request-ads',
+          );
+          _listener?.onAdRequestFailure(
+            placement,
+            info,
+            'ump-cannot-request-ads',
             result.adNetwork ?? info.normalizedNetworkId,
             result.adSourceName ?? result.adNetwork ?? info.normalizedNetworkId,
             seconds,
@@ -1184,7 +1240,10 @@ class FlutterBoomPdfAdCorePlugins {
     return entries == null || entries.isEmpty ? null : entries.first;
   }
 
-  Future<LoadedAdCacheEntry?> _selectCachedEntry(Object placement) async {
+  Future<LoadedAdCacheEntry?> _selectCachedEntry(
+    Object placement, {
+    Object? adPosId,
+  }) async {
     final first = _firstEntry(placement);
     if (first == null) return null;
 
@@ -1217,8 +1276,26 @@ class FlutterBoomPdfAdCorePlugins {
         final tpWins = await auctionCandidate.winsAgainst(
           competitorRevenueMicros: bestAdmob.estimatedRevenueMicros,
           competitorInfo: bestAdmob.info,
-          onBidStart: (info) => _listener?.bidStart(info),
-          onBidOver: (info, tpWins) => _listener?.bidOver(info, tpWins),
+          candidateInfo: tradplus.info,
+          onBidStart: adPosId == null
+              ? null
+              : (admobInfo, tradplusInfo) => _listener?.bidStart(
+                  placement,
+                  adPosId,
+                  tradplus.ad.adNetwork,
+                  admobInfo,
+                  tradplusInfo,
+                ),
+          onBidOver: adPosId == null
+              ? null
+              : (winnerInfo) => _listener?.bidOver(
+                  placement,
+                  adPosId,
+                  identical(winnerInfo, tradplus.info)
+                      ? tradplus.ad.adNetwork
+                      : bestAdmob.ad.adNetwork,
+                  winnerInfo,
+                ),
         );
         if (tpWins == true) tradplusWinners.add(tradplus);
         _log(
@@ -1311,7 +1388,28 @@ class FlutterBoomPdfAdCorePlugins {
   }
 
   bool _isLoadableConfig(AdInfoBean info) =>
-      info.adId?.isNotEmpty == true && info.parsedAdType != null;
+      info.adId?.isNotEmpty == true &&
+      info.parsedAdType != null &&
+      _networkCanRequestAds(info.normalizedNetworkId);
+
+  bool _networkCanRequestAds(String networkId) =>
+      networkId != _admobNetworkId || _admobCanRequestAds != false;
+
+  Future<void> _clearNetworkCache(String networkId) async {
+    final placements = _cache.keys.toList(growable: false);
+    for (final placement in placements) {
+      final entries = _cache[placement];
+      if (entries == null) continue;
+      final removed = entries
+          .where((entry) => entry.ad.networkId == networkId)
+          .toList(growable: false);
+      entries.removeWhere((entry) => entry.ad.networkId == networkId);
+      for (final entry in removed) {
+        await entry.dispose();
+      }
+      if (entries.isEmpty) _cache.remove(placement);
+    }
+  }
 
   Map<Object, List<AdInfoBean>> _boxConfigs<K>(
     Map<K, List<AdInfoBean>> configs,

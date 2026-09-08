@@ -100,11 +100,8 @@ Future<void> main() async {
   );
 
   // 5. 如项目需要 AdMob UMP，在广告 SDK 初始化前执行。
-  // final consent = await ads.handleUmpConsent();
-  // if (!consent.canRequestAds) {
-  //   runApp(const App());
-  //   return;
-  // }
+  // 不要在 canRequestAds=false 时 return；Core 会只停用 AdMob，其他平台照常运行。
+  final consent = await ads.handleUmpConsent();
 
   // 6. 并行初始化全部已安装平台。
   await ads.initializeNetworks();
@@ -120,6 +117,8 @@ Future<void> main() async {
 ```
 
 `initializeNetworks()` 会并行启动所有已经注册的 Adapter。TradPlus 必须等待 SDK 初始化成功，所以这个 Future 会等待 TradPlus；AdMob 调用 `MobileAds.instance.initialize()` 后立即返回，不会阻塞广告请求。AdMob SDK 真正初始化完成后，Core 才会回调 `onNetworkInitialized('admob')` 和 `onAdmobInitialized()`。
+
+调用 `handleUmpConsent()` 后，Core 会保存 AdMob 的 `canRequestAds` 状态。若为 `false`，Core 会清除已有 AdMob 缓存，并在 `initializeNetworks()`、`loadPlacement()` 和 `preloadAll()` 中跳过 AdMob；同一广告位里的 TradPlus 等其他平台不会受影响。未调用 UMP 的项目保持原行为。隐私状态可能变化时，调用 `canRequestAds()` 可刷新这个门控状态；状态恢复允许后，再调用 `initializeNetwork('admob')` 并重新请求广告。
 
 如果需要逐个平台控制，可以改为：
 
@@ -441,13 +440,32 @@ class AppAdListener extends FlutterBoomPdfAdListener {
   const AppAdListener();
 
   @override
-  void bidStart(AdInfoBean info) {
-    debugPrint('开始比价：${info.adId} / ${info.price} micros');
+  void bidStart(
+    Object placement,
+    Object adPosId,
+    String adNetwork,
+    AdInfoBean admobInfo,
+    AdInfoBean tradplusInfo,
+  ) {
+    debugPrint(
+      '开始比价：$placement/$adPosId/$adNetwork，'
+      'AdMob=${admobInfo.adId}/${admobInfo.price} micros，'
+      'TradPlus=${tradplusInfo.adId}/${tradplusInfo.price} micros',
+    );
   }
 
   @override
-  void bidOver(AdInfoBean info, bool tpWins) {
-    debugPrint('比价结束：${tpWins ? 'TradPlus' : 'AdMob'} 胜出');
+  void bidOver(
+    Object placement,
+    Object adPosId,
+    String adNetwork,
+    AdInfoBean winnerInfo,
+  ) {
+    debugPrint(
+      '比价结束：$placement/$adPosId/$adNetwork，'
+      '${winnerInfo.adPlat} 胜出，'
+      '${winnerInfo.adId}/${winnerInfo.price} micros',
+    );
   }
 
   @override
@@ -514,6 +532,8 @@ class AppAdListener extends FlutterBoomPdfAdListener {
   }
 }
 ```
+
+`bidStart` 的 `adNetwork` 是当前参与比较的 TradPlus 广告实际网络；`bidOver` 的 `adNetwork` 是本次胜出广告的实际网络。Core 只在调用方提供真实 `adPosId` 的展示或 Widget 获取流程中触发这两个回调；直接调用不带 `adPosId` 的 `getCachedEntry`、`getCachedAd` 等查询接口仍会完成缓存比价，但不会发送比价事件。
 
 主要生命周期回调：
 
