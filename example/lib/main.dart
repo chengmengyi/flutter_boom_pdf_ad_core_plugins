@@ -1,20 +1,14 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_boom_pdf_ad_admob_plugins/flutter_boom_pdf_ad_admob_plugins.dart';
 import 'package:flutter_boom_pdf_ad_core_plugins/flutter_boom_pdf_ad_core_plugins.dart';
 import 'package:flutter_boom_pdf_ad_tradplus_plugins/flutter_boom_pdf_ad_tradplus_plugins.dart';
 
 const _placement = 'pr_new_launch';
-const _loadPlacements = <String>[_placement, 'pr_ban1', 'pr_ban2'];
+// const _loadPlacements = <String>[_placement, 'pr_ban1', 'pr_ban2'];
+const _loadPlacements = <String>['pr_new_launch'];
 
-// TODO: 替换成项目实际使用的 ID。
 // AdMob Application ID 另外配置在 AndroidManifest.xml 和 Info.plist 中。
 const _tradplusAppId = 'CF2B2EDDC7F18DC98BF044ACCCE4FF11';
-const _androidAdmobInterstitialId = 'ca-app-pub-3940256099942544/1033173712';
-const _iosAdmobInterstitialId = 'YOUR_IOS_ADMOB_INTERSTITIAL_ID';
-const _androidTradplusInterstitialId = 'C82CA60397FE71E933EEF0207999F212';
-const _iosTradplusInterstitialId = 'YOUR_IOS_TRADPLUS_INTERSTITIAL_ID';
 const _queryAdRevenueConfig = QueryAdRevenueConfig(
   // TODO: 接入 App 自己的 so 后改为 true，并填写三种广告对应的 key。
   enableRevenue: false,
@@ -64,6 +58,7 @@ class _AdDemoPageState extends State<AdDemoPage> {
   Future<void> _initialize() async {
     await _run('初始化', () async {
       _core.setListener(_DemoListener(_setStatus));
+      _core.updateAdRequestTimeoutSeconds(1);
 
       await FlutterBoomPdfAdAdmobPlugins.install(
         into: _core,
@@ -86,7 +81,7 @@ class _AdDemoPageState extends State<AdDemoPage> {
       _initialized = true;
       _setStatus(
         '初始化完成：${_core.registeredNetworkIds.join(', ')}；'
-        '$_placement 合并后有 ${configs[_placement]?.length ?? 0} 条配置',
+        '$_placement 有 ${configs[_placement]?.length ?? 0} 条配置',
       );
     });
   }
@@ -184,7 +179,7 @@ class _AdDemoPageState extends State<AdDemoPage> {
   }
 }
 
-/// 模拟服务端原始 JSON：两个不同配置 Key 实际属于同一个业务广告位。
+/// 模拟服务端原始 JSON：同一个 placement 可直接配置多个平台、多条广告。
 Map<String, dynamic> _buildRawConfigs() {
   return {
     "pr_new_launch": [
@@ -194,9 +189,7 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "open",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
+        "grp": [0],
       },
       {
         "jsk": "ca-app-pub-3940256099942544/9257395921",
@@ -204,9 +197,7 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "open",
         "isk": 13800,
         "ipn": 3,
-        "grp": [
-          0
-        ]
+        "grp": [0],
       },
       {
         "jsk": "31A5F4D1FA3FCAFA0EE568C3BA1E8112",
@@ -214,10 +205,16 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "open",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
-      }
+        "grp": [0],
+      },
+      {
+        "jsk": "C6CAC4CDF2A0F7501F0DEC7A76FF1D12",
+        "iwk": "tradplus",
+        "iwn": "open",
+        "isk": 13800,
+        "ipn": 3,
+        "grp": [0],
+      },
     ],
     "pr_launch": [
       {
@@ -226,9 +223,7 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "open",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
+        "grp": [0],
       },
       {
         "jsk": "ca-app-pub-3940256099942544/9257395921",
@@ -236,9 +231,7 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "open",
         "isk": 13800,
         "ipn": 3,
-        "grp": [
-          0
-        ]
+        "grp": [0],
       },
       {
         "jsk": "7493F7AF53B80B5DCD1CD409F4F50F12",
@@ -246,10 +239,8 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "open",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
-      }
+        "grp": [0],
+      },
     ],
     "pr_ban1": [
       {
@@ -258,9 +249,7 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "nat",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
+        "grp": [0],
       },
       {
         "jsk": "0098184D8C40452444AD164B741EC812",
@@ -268,10 +257,8 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "nat",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
-      }
+        "grp": [0],
+      },
     ],
     "pr_ban2": [
       {
@@ -280,9 +267,7 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "nat",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
+        "grp": [0],
       },
       {
         "jsk": "7493F7AF53B80B5DCD1CD409F4F50F12",
@@ -290,10 +275,8 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "nat",
         "isk": 13800,
         "ipn": 3,
-        "grp": [
-          0
-        ]
-      }
+        "grp": [0],
+      },
     ],
     "pr_user_use": [
       {
@@ -302,9 +285,7 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "int",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
+        "grp": [0],
       },
       {
         "jsk": "C82CA60397FE71E933EEF0207999F212",
@@ -312,10 +293,8 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "int",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
-      }
+        "grp": [0],
+      },
     ],
     "pr_exit": [
       {
@@ -324,9 +303,7 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "open",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
+        "grp": [0],
       },
       {
         "jsk": "C6CAC4CDF2A0F7501F0DEC7A76FF1D12",
@@ -334,45 +311,30 @@ Map<String, dynamic> _buildRawConfigs() {
         "iwn": "open",
         "isk": 13800,
         "ipn": 4,
-        "grp": [
-          0
-        ]
-      }
-    ]
+        "grp": [0],
+      },
+    ],
   };
 }
 
-/// 将配置层的 pr_new_launch/pr_new_launch2 合并成逻辑广告位 pr_new_launch。
+/// 将服务端 JSON 按原始 Key 转成 Core 使用的 placement 配置。
 Map<String, List<AdInfoBean>> _parsePlacementConfigs(
   Map<String, dynamic> rawConfigs,
 ) {
   final result = <String, List<AdInfoBean>>{};
   for (final entry in rawConfigs.entries) {
-    final placement = _logicalPlacementForConfigKey(entry.key);
     final value = entry.value;
-    if (placement == null || value is! List) continue;
+    if (value is! List) continue;
 
-    final configs = result.putIfAbsent(placement, () => <AdInfoBean>[]);
-    configs.addAll(
-      value.whereType<Map>().map(
-        (item) => AdInfoBean.fromPlacementJson(Map<String, dynamic>.from(item)),
-      ),
-    );
+    result[entry.key] = value
+        .whereType<Map>()
+        .map(
+          (item) =>
+              AdInfoBean.fromPlacementJson(Map<String, dynamic>.from(item)),
+        )
+        .toList(growable: false);
   }
   return result;
-}
-
-String? _logicalPlacementForConfigKey(String configKey) {
-  switch (configKey) {
-    case 'pr_new_launch':
-    case 'pr_new_launch2':
-      return _placement;
-    case 'pr_launch':
-    case 'pr_launch2':
-      return 'pr_launch';
-    default:
-      return configKey;
-  }
 }
 
 class _DemoListener extends FlutterBoomPdfAdListener {
