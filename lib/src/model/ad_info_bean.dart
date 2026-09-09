@@ -38,7 +38,7 @@ class AdInfoBean {
   int? sort;
   List<int>? userGroup;
 
-  /// Runtime estimated revenue in micros. Adapters populate this after an ad
+  /// Runtime normalized comparison price. Adapters populate this after an ad
   /// loads; it is intentionally excluded from placement JSON parsing/output.
   double price;
 

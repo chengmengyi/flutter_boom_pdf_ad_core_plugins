@@ -161,8 +161,9 @@ class AdNetworkEvent {
 }
 
 /// Optional capability implemented by an ad whose SDK owns the final auction
-/// decision. The competitor value and both callback prices are expressed in
-/// revenue micros.
+/// decision. The competitor value and both callback prices use the normalized
+/// price unit returned by the adapters. The `Micros` suffix is retained for
+/// source compatibility.
 abstract interface class AdAuctionCandidate {
   Future<bool?> winsAgainst({
     required double competitorRevenueMicros,
@@ -174,7 +175,8 @@ abstract interface class AdAuctionCandidate {
 }
 
 /// Optional capability for adapters that can resolve a loaded ad's estimated
-/// revenue. Core always uses revenue micros regardless of the SDK's unit.
+/// revenue. Implementations return the normalized comparison price. The
+/// `Micros` suffix is retained for source compatibility.
 abstract interface class AdEstimatedRevenueCandidate {
   Future<double?> getEstimatedRevenueMicros();
 }

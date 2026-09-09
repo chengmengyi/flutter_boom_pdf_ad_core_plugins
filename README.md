@@ -45,13 +45,13 @@ App 必须继续完成 AdMob 和 TradPlus 各自要求的 Android/iOS 原生配�
 3. 设置各平台初始化参数和隐私参数。
 4. 设置 Core 监听器及通用配置。
 5. 调用 `initPlugins`，把 Core 配置下发给 Adapter。
-6. 如需 AdMob UMP，先完成 UMP 流程。
-7. 初始化所有已注册的平台。
-8. 写入广告位配置，然后开始预加载。
+6. 写入广告位配置，然后开始预加载。Core 会自动按平台完成 UMP/初始化。
 
 完整示例：
 
 ```dart
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_boom_pdf_ad_admob_plugins/flutter_boom_pdf_ad_admob_plugins.dart';
 import 'package:flutter_boom_pdf_ad_core_plugins/flutter_boom_pdf_ad_core_plugins.dart';
@@ -62,7 +62,7 @@ Future<void> main() async {
 
   final ads = FlutterBoomPdfAdCorePlugins.instance;
 
-  // 1. 注册平台。install 必须在 initializeNetworks 之前调用。
+  // 1. 注册平台。
   await FlutterBoomPdfAdAdmobPlugins.install(
     into: ads,
     queryAdRevenueConfig: const QueryAdRevenueConfig(
@@ -99,37 +99,26 @@ Future<void> main() async {
     nativeAdChoicesPlacement: AdChoicesPlacement.bottomLeftCorner,
   );
 
-  // 5. 如项目需要 AdMob UMP，在广告 SDK 初始化前执行。
-  // 不要在 canRequestAds=false 时 return；Core 会只停用 AdMob，其他平台照常运行。
-  final consent = await ads.handleUmpConsent();
-
-  // 6. 并行初始化全部已安装平台。
-  await ads.initializeNetworks();
-
-  // 7. 设置广告位。实际项目一般由服务端配置转换而来。
+  // 5. 设置广告位。实际项目一般由服务端配置转换而来。
   configureAdPlacements(ads);
 
-  // 8. 可以在启动时统一预加载，也可以进入页面后按广告位请求。
-  await ads.preloadAll();
+  // 6. 一次调用会并发启动各平台自己的准备和加载流程。
+  // 不等待它即可避免阻塞应用初始化。
+  unawaited(ads.preloadAll());
 
   runApp(const App());
 }
 ```
 
-`initializeNetworks()` 会并行启动所有已经注册的 Adapter。TradPlus 必须等待 SDK 初始化成功，所以这个 Future 会等待 TradPlus；AdMob 调用 `MobileAds.instance.initialize()` 后立即返回，不会阻塞广告请求。AdMob SDK 真正初始化完成后，Core 才会回调 `onNetworkInitialized('admob')` 和 `onAdmobInitialized()`。
-
-Core 会按平台复用同一个初始化任务，并在每个平台自己的加载队列前等待该任务。需要在启动阶段立即请求广告时，不要先单独 `await initializeNetworks()`，而是让初始化和预加载同时启动：
+Core 会按平台复用同一个初始化任务，并在每个平台自己的加载队列前自动等待该任务。业务 App 不需要先调用 `handleUmpConsent()` 或 `initializeNetworks()`，直接开始预加载即可：
 
 ```dart
-final initializeFuture = ads.initializeNetworks();
-final preloadFuture = ads.preloadAll();
-
-await Future.wait<void>([initializeFuture, preloadFuture]);
+unawaited(ads.preloadAll());
 ```
 
-此时 AdMob 的初始化任务立即允许加载，所以会马上开始请求；TradPlus 的加载队列会等待 `tp_initFinish` 成功后才请求。两个平台仍属于同一次 placement 加载，不会重复请求 AdMob。同一平台被多个 placement 同时使用时，也只会初始化一次。
+此时 Core 会同时启动两个平台分支：AdMob Adapter 先执行 UMP，只有 `canRequestAds=true` 才启动 Mobile Ads 并请求广告，而且不等待 `MobileAds.initialize()` 完成；TradPlus 不等待 UMP，只等待自己的 `tp_initFinish` 成功后请求。两个平台仍属于同一次 placement 加载，不会重复请求，同一平台被多个 placement 同时使用时也只会初始化一次。
 
-调用 `handleUmpConsent()` 后，Core 会保存 AdMob 的 `canRequestAds` 状态。若为 `false`，Core 会清除已有 AdMob 缓存，并在 `initializeNetworks()`、`loadPlacement()` 和 `preloadAll()` 中跳过 AdMob；同一广告位里的 TradPlus 等其他平台不会受影响。未调用 UMP 的项目保持原行为。隐私状态可能变化时，调用 `canRequestAds()` 可刷新这个门控状态；状态恢复允许后，再调用 `initializeNetwork('admob')` 并重新请求广告。
+自动 UMP 返回 `canRequestAds=false` 时，Core 会清除已有 AdMob 缓存并跳过 AdMob，同一广告位里的 TradPlus 等其他平台不会受影响。`handleUmpConsent()`、`canRequestAds()` 和 `initializeNetworks()` 仍保留为兼容及手动控制 API，正常启动流程不需要调用。隐私状态恢复允许后，可重新请求对应广告位。
 
 如果需要逐个平台控制，可以改为：
 
@@ -201,7 +190,7 @@ void configureAdPlacements(FlutterBoomPdfAdCorePlugins ads) {
 | `sort` | 当前版本的请求优先级，数字越大越先请求 |
 | `userGroup` | 用户分组；包含 `0` 表示所有用户可用 |
 | `exportTime` | 广告缓存有效期，单位为秒 |
-| `price` | 加载/比价后填充的运行时预估收益（micros），不属于配置 JSON |
+| `price` | 加载/比价后填充的换算后运行时价格，不属于配置 JSON |
 
 兼容旧配置：`adPlat` 为 `null`、空字符串或者 `google` 时，Core 会路由到 AdMob。
 
@@ -261,11 +250,11 @@ ads.updateSingleFillPlacements(<String>{
 
 1. 缓存里只有一个候选广告时直接返回，不发起比价。
 2. 多条 AdMob 缓存先按预估收益取最高值；每条 TradPlus 缓存都会分别与这条 AdMob 比较，因此超时后晚到的成功缓存也会参与。
-3. Core 把 AdMob 微单位收益除以 `1000000` 后传给 TradPlus，Android 端调用 `TPOutcome().isTPW(admobPrice, tpAdInfo)`。
+3. AdMob Adapter 在加载成功后把查询收益除以 `1000000`；Core 将这个已换算价格直接传给 TradPlus，Android 端调用 `TPOutcome().isTPW(admobPrice, tpAdInfo)`。
 4. 一条或多条 TradPlus 胜出后，Core 会逐条探测其美元 eCPM；只有一条时用于补齐运行时价格，多条时选择价格最高的一条。
-5. `AdInfoBean.price` 是运行时价格，统一使用 micros，不会从配置 JSON 读取，也不会写回 JSON。
+5. `AdInfoBean.price` 是换算后的运行时比价价格，不会从配置 JSON 读取，也不会写回 JSON。
 
-AdMob 的预估收益由 `query_ad_revenue` 提供，当前支持 App Open、插屏和原生广告；激励视频和 Banner 在 Release 中按 `0` 参与比较。Debug 模式下，如果查询值为 `0`（包括不支持的类型或查询异常），AdMob Adapter 会从 `123000`、`1240000`、`12500000`、`126000000` micros 中随机取一个并写入缓存；后续所有比价复用该值。查询收益所需的 `.so` 仍放在业务 App，由 `QueryAdRevenueConfig.libName` 指定，不需要放进 AdMob Adapter。
+AdMob 的预估收益由 `query_ad_revenue` 提供，当前支持 App Open、插屏和原生广告；查询结果统一除以 `1000000` 后写入缓存及 `AdInfoBean.price`。激励视频和 Banner 在 Release 中按 `0` 参与比较。Debug 模式下，如果查询值为 `0`（包括不支持的类型或查询异常），AdMob Adapter 会先从 `123000`、`1240000`、`12500000`、`126000000` 中随机取一个，再除以 `1000000`，后续所有比价复用该值。查询收益所需的 `.so` 仍放在业务 App，由 `QueryAdRevenueConfig.libName` 指定，不需要放进 AdMob Adapter。
 
 直接传入临时配置：
 
@@ -460,8 +449,8 @@ class AppAdListener extends FlutterBoomPdfAdListener {
   ) {
     debugPrint(
       '开始比价：$placement/$adPosId/$adNetwork，'
-      'AdMob=${admobInfo.adId}/${admobInfo.price} micros，'
-      'TradPlus=${tradplusInfo.adId}/${tradplusInfo.price} micros',
+      'AdMob=${admobInfo.adId}/${admobInfo.price}，'
+      'TradPlus=${tradplusInfo.adId}/${tradplusInfo.price}',
     );
   }
 
@@ -475,7 +464,7 @@ class AppAdListener extends FlutterBoomPdfAdListener {
     debugPrint(
       '比价结束：$placement/$adPosId/$adNetwork，'
       '${winnerInfo.adPlat} 胜出，'
-      '${winnerInfo.adId}/${winnerInfo.price} micros',
+      '${winnerInfo.adId}/${winnerInfo.price}',
     );
   }
 
@@ -570,7 +559,7 @@ await FlutterBoomPdfAdAdmobPlugins.install(
   ),
 );
 await ads.initPlugins(distinctId: userId);
-await ads.initializeAdmob();
+unawaited(ads.preloadAll());
 ```
 
 只使用 TradPlus：
@@ -580,7 +569,7 @@ FlutterBoomPdfAdTradplusPlugins.install(
   appId: 'YOUR_TRADPLUS_APP_ID',
 );
 await ads.initPlugins(distinctId: userId);
-await ads.initializeNetwork('tradplus');
+unawaited(ads.preloadAll());
 ```
 
 广告位配置中只放对应平台的 `AdInfoBean`。Core 根据已经安装的 Adapter 和广告配置工作，不需要业务代码手动声明当前有几个平台。

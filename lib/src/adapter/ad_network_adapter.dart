@@ -4,6 +4,10 @@ import '../model/ad_type.dart';
 abstract class FlutterBoomPdfAdAdapter {
   String get networkId;
 
+  /// Whether this adapter must complete its consent flow before its SDK can be
+  /// initialized and its ads can be requested.
+  bool get requiresConsentBeforeInitialization => false;
+
   Future<void> configure(AdNetworkConfiguration configuration) async {}
 
   Future<void> initialize();

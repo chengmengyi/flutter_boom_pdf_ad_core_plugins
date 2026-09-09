@@ -26,6 +26,7 @@ void main() {
   tearDown(() async {
     core.setListener(null);
     core.updateAdRequestTimeoutSeconds(0);
+    core.updateSkipReloadAfterClosePlacements<Object>(const <Object>[]);
     await core.dispose();
     core.updateConfigs<Object>(const <Object, List<AdInfoBean>>{});
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -46,6 +47,68 @@ void main() {
     final selected = await core.getCachedEntry('home');
 
     expect(selected?.ad.networkId, 'admob');
+  });
+
+  test('checks cache availability without running an auction', () async {
+    final admob = _FakeAdapter(
+      networkId: 'admob',
+      estimatedRevenueMicros: 2500000,
+    );
+    final tradplus = _FakeAdapter(networkId: 'tradplus', auctionWinner: true);
+    core
+      ..registerAdapter(admob)
+      ..registerAdapter(tradplus)
+      ..updateSkipReloadAfterClosePlacements(<String>['home'])
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
+      });
+
+    await core.loadPlacement('home', force: true);
+    final cachedInfo = await core.getAvailableCachedAdInfo('home');
+
+    expect(cachedInfo, isNotNull);
+    expect(tradplus.lastCompetitorRevenueMicros, isNull);
+  });
+
+  test('reads a cached ad without running an auction', () async {
+    final admob = _FakeAdapter(
+      networkId: 'admob',
+      estimatedRevenueMicros: 2500000,
+    );
+    final tradplus = _FakeAdapter(networkId: 'tradplus', auctionWinner: true);
+    core
+      ..registerAdapter(admob)
+      ..registerAdapter(tradplus)
+      ..updateSkipReloadAfterClosePlacements(<String>['home'])
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
+      });
+
+    await core.loadPlacement('home', force: true);
+    final cachedAd = await core.getCachedAd('home');
+
+    expect(cachedAd, isNotNull);
+    expect(tradplus.lastCompetitorRevenueMicros, isNull);
+  });
+
+  test('checks display availability without running an auction', () async {
+    final admob = _FakeAdapter(
+      networkId: 'admob',
+      estimatedRevenueMicros: 2500000,
+    );
+    final tradplus = _FakeAdapter(networkId: 'tradplus', auctionWinner: true);
+    core
+      ..registerAdapter(admob)
+      ..registerAdapter(tradplus)
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
+      });
+
+    await core.loadPlacement('home', force: true);
+    final canDisplay = await core.canDisplayPlacement('home');
+
+    expect(canDisplay, isTrue);
+    expect(tradplus.lastCompetitorRevenueMicros, isNull);
   });
 
   test('does not block on a deferred SDK completion callback', () async {
@@ -100,7 +163,7 @@ void main() {
   });
 
   test(
-    'loads AdMob immediately and waits for TradPlus initialization',
+    'loadPlacement initializes AdMob without an explicit initializeNetworks',
     () async {
       final tradplusInitialized = Completer<void>();
       final admob = _FakeAdapter(networkId: 'admob');
@@ -115,7 +178,6 @@ void main() {
           'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
         });
 
-      final initialization = core.initializeNetworks();
       final loading = core.loadPlacement('home', force: true);
       for (var attempt = 0; attempt < 10 && admob.loadCount == 0; attempt++) {
         await Future<void>.delayed(Duration.zero);
@@ -125,14 +187,19 @@ void main() {
       expect(tradplus.loadCount, 0);
 
       tradplusInitialized.complete();
-      await Future.wait<Object?>(<Future<Object?>>[initialization, loading]);
+      await loading;
 
       expect(tradplus.loadCount, 1);
     },
   );
 
-  test('UMP denial gates AdMob but keeps TradPlus available', () async {
-    final admob = _FakeAdapter(networkId: 'admob', umpCanRequestAds: false);
+  test('TradPlus loads while AdMob is waiting for automatic UMP', () async {
+    final consentCompleted = Completer<UmpConsentResult>();
+    final admob = _FakeAdapter(
+      networkId: 'admob',
+      requiresConsentBeforeInitialization: true,
+      umpConsentFuture: consentCompleted.future,
+    );
     final tradplus = _FakeAdapter(networkId: 'tradplus');
     core
       ..registerAdapter(admob)
@@ -141,11 +208,39 @@ void main() {
         'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
       });
 
-    final consent = await core.handleUmpConsent();
-    await core.initializeNetworks();
+    final loading = core.loadPlacement('home', force: true);
+    for (var attempt = 0; attempt < 10 && tradplus.loadCount == 0; attempt++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    expect(tradplus.initializeCount, 1);
+    expect(tradplus.loadCount, 1);
+    expect(admob.initializeCount, 0);
+    expect(admob.loadCount, 0);
+
+    consentCompleted.complete(_umpResult(canRequestAds: true));
+    await loading;
+
+    expect(admob.initializeCount, 1);
+    expect(admob.loadCount, 1);
+  });
+
+  test('UMP denial gates AdMob but keeps TradPlus available', () async {
+    final admob = _FakeAdapter(
+      networkId: 'admob',
+      umpCanRequestAds: false,
+      requiresConsentBeforeInitialization: true,
+    );
+    final tradplus = _FakeAdapter(networkId: 'tradplus');
+    core
+      ..registerAdapter(admob)
+      ..registerAdapter(tradplus)
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
+      });
+
     await core.loadPlacement('home', force: true);
 
-    expect(consent.canRequestAds, isFalse);
     expect(admob.initializeCount, 0);
     expect(admob.loadCount, 0);
     expect(tradplus.initializeCount, 1);
@@ -187,14 +282,19 @@ void main() {
     core
       ..registerAdapter(admob)
       ..registerAdapter(tradplus)
+      ..updateSkipReloadAfterClosePlacements(<String>['home'])
       ..updateConfigs<String>(<String, List<AdInfoBean>>{
         'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
       });
 
     await core.loadPlacement('home', force: true);
-    final selected = await core.getCachedEntry('home');
+    final shown = await core.showCachedAd(
+      'home',
+      adPosId: 'auction-pos',
+      context: null,
+    );
 
-    expect(selected?.ad.networkId, 'tradplus');
+    expect(shown, isTrue);
     expect(tradplus.lastCompetitorRevenueMicros, 2500000);
   });
 
@@ -216,6 +316,7 @@ void main() {
         ..updateAdRequestTimeoutSeconds(1)
         ..registerAdapter(admob)
         ..registerAdapter(tradplus)
+        ..updateSkipReloadAfterClosePlacements(<String>['home'])
         ..updateConfigs<String>(<String, List<AdInfoBean>>{
           'home': <AdInfoBean>[
             _infoWithId('admob', 'admob-1'),
@@ -227,12 +328,14 @@ void main() {
 
       await core.loadPlacement('home', force: true);
       await Future<void>.delayed(const Duration(milliseconds: 250));
-      final selected = await core.getCachedEntry(
+      final shown = await core.showCachedAd(
         'home',
         adPosId: 'auction-pos',
+        context: null,
       );
 
-      expect(selected?.info.adId, 'tp-2');
+      expect(shown, isTrue);
+      expect(tradplus.shownAdIds, <String>['tp-2']);
       expect(tradplus.competitorPrices, <double>[4000000, 4000000]);
       expect(tradplus.estimatedPriceRequests, <String>['tp-1', 'tp-2']);
       expect(listener.starts, <String>[
@@ -243,7 +346,6 @@ void main() {
         'home:auction-pos:tradplus|tp-1:5000000.0',
         'home:auction-pos:tradplus|tp-2:7000000.0',
       ]);
-      expect(selected?.info.price, 7000000);
     },
   );
 
@@ -264,6 +366,7 @@ void main() {
         ..setListener(listener)
         ..registerAdapter(admob)
         ..registerAdapter(tradplus)
+        ..updateSkipReloadAfterClosePlacements(<String>['home'])
         ..updateConfigs<String>(<String, List<AdInfoBean>>{
           'home': <AdInfoBean>[
             _infoWithId('admob', 'admob-only'),
@@ -272,13 +375,14 @@ void main() {
         });
 
       await core.loadPlacement('home', force: true);
-      final selected = await core.getCachedEntry(
+      final shown = await core.showCachedAd(
         'home',
         adPosId: 'auction-pos',
+        context: null,
       );
 
-      expect(selected?.info.adId, 'tp-only');
-      expect(selected?.info.price, 3500000);
+      expect(shown, isTrue);
+      expect(tradplus.shownAdIds, <String>['tp-only']);
       expect(tradplus.estimatedPriceRequests, <String>['tp-only']);
       expect(listener.starts, <String>[
         'home:auction-pos:tradplus|'
@@ -305,6 +409,7 @@ void main() {
       ..setListener(listener)
       ..registerAdapter(admob)
       ..registerAdapter(tradplus)
+      ..updateSkipReloadAfterClosePlacements(<String>['home'])
       ..updateConfigs<String>(<String, List<AdInfoBean>>{
         'home': <AdInfoBean>[
           _infoWithId('admob', 'admob-2'),
@@ -313,9 +418,14 @@ void main() {
       });
 
     await core.loadPlacement('home', force: true);
-    final selected = await core.getCachedEntry('home', adPosId: 'auction-pos');
+    final shown = await core.showCachedAd(
+      'home',
+      adPosId: 'auction-pos',
+      context: null,
+    );
 
-    expect(selected?.info.adId, 'admob-2');
+    expect(shown, isTrue);
+    expect(admob.shownAdIds, <String>['admob-2']);
     expect(listener.overs, <String>[
       'home:auction-pos:admob|admob-2:6000000.0',
     ]);
@@ -335,7 +445,10 @@ void main() {
       });
 
     await core.loadPlacement('home', force: true);
-    expect(await core.showCachedAd('home', adPosId: 'test'), isTrue);
+    expect(
+      await core.showCachedAd('home', adPosId: 'test', context: null),
+      isTrue,
+    );
     for (var attempt = 0; attempt < 20 && tradplus.loadCount < 2; attempt++) {
       await Future<void>.delayed(const Duration(milliseconds: 1));
     }
@@ -350,6 +463,16 @@ AdInfoBean _info(String networkId) => AdInfoBean(
   adPlat: networkId,
   adType: 'int',
   userGroup: <int>[0],
+);
+
+UmpConsentResult _umpResult({required bool canRequestAds}) => UmpConsentResult(
+  canRequestAds: canRequestAds,
+  countryCode: '',
+  requiresCmpByLocale: false,
+  consentStatus: canRequestAds
+      ? ConsentStatus.obtained
+      : ConsentStatus.required,
+  privacyOptionsRequirementStatus: PrivacyOptionsRequirementStatus.notRequired,
 );
 
 AdInfoBean _infoWithId(String networkId, String adId) => AdInfoBean(
@@ -368,6 +491,8 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
     this.initializeFuture,
     this.initializationCompleted,
     this.umpCanRequestAds = true,
+    this.requiresConsentBeforeInitialization = false,
+    this.umpConsentFuture,
   });
 
   @override
@@ -376,6 +501,9 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
   final bool? auctionWinner;
   final Future<void>? initializeFuture;
   final bool umpCanRequestAds;
+  @override
+  final bool requiresConsentBeforeInitialization;
+  final Future<UmpConsentResult>? umpConsentFuture;
   @override
   final Future<void>? initializationCompleted;
   double? lastCompetitorRevenueMicros;
@@ -395,16 +523,7 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
     Object? params,
     bool loadAndShowFormIfRequired = true,
     bool fetchStatusSnapshot = false,
-  }) async => UmpConsentResult(
-    canRequestAds: umpCanRequestAds,
-    countryCode: countryCode,
-    requiresCmpByLocale: requiresCmpByLocale,
-    consentStatus: umpCanRequestAds
-        ? ConsentStatus.obtained
-        : ConsentStatus.required,
-    privacyOptionsRequirementStatus:
-        PrivacyOptionsRequirementStatus.notRequired,
-  );
+  }) async => umpConsentFuture ?? _umpResult(canRequestAds: umpCanRequestAds);
 
   @override
   bool supports(AdType adType) => true;
@@ -483,6 +602,7 @@ class _MultiFakeAdapter extends FlutterBoomPdfAdAdapter {
   final Map<String, bool> auctionResults;
   final List<double> competitorPrices = <double>[];
   final List<String> estimatedPriceRequests = <String>[];
+  final List<String> shownAdIds = <String>[];
 
   @override
   Future<void> initialize() async {}
@@ -506,8 +626,9 @@ class _MultiFakeAdapter extends FlutterBoomPdfAdAdapter {
             estimatedRevenueMicros: revenues[adId] ?? 0,
             competitorPrices: competitorPrices,
             estimatedPriceRequests: estimatedPriceRequests,
+            onShown: () => shownAdIds.add(adId),
           )
-        : _FakeAd(networkId);
+        : _FakeAd(networkId, onShown: () => shownAdIds.add(adId));
     return AdLoadResult.success(
       ad,
       estimatedRevenueMicros: networkId == 'admob' ? revenues[adId] ?? 0 : 0,
@@ -524,6 +645,7 @@ class _MultiFakeAuctionAd extends _FakeAd
     required this.estimatedRevenueMicros,
     required this.competitorPrices,
     required this.estimatedPriceRequests,
+    required super.onShown,
   }) : super(networkId);
 
   final String adId;
@@ -561,10 +683,11 @@ class _MultiFakeAuctionAd extends _FakeAd
 }
 
 class _FakeAd implements LoadedNetworkAd {
-  _FakeAd(this.networkId);
+  _FakeAd(this.networkId, {this.onShown});
 
   @override
   final String networkId;
+  final VoidCallback? onShown;
 
   @override
   String get adNetwork => networkId;
@@ -593,7 +716,10 @@ class _FakeAd implements LoadedNetworkAd {
   @override
   Future<AdShowResult> show({
     OnUserEarnedRewardCallback? onUserEarnedReward,
-  }) async => const AdShowResult.success();
+  }) async {
+    onShown?.call();
+    return const AdShowResult.success();
+  }
 }
 
 class _FakeAuctionAd extends _FakeAd implements AdAuctionCandidate {

@@ -276,7 +276,10 @@ class FlutterBoomPdfAdCorePlugins {
     Future<void> task,
   ) async {
     try {
-      await _initializeNetwork(id, adapter);
+      final initialized = await _initializeNetwork(id, adapter);
+      if (!initialized && identical(_networkInitializationTasks[id], task)) {
+        _networkInitializationTasks.remove(id);
+      }
       completer.complete();
     } catch (error, stackTrace) {
       if (identical(_networkInitializationTasks[id], task)) {
@@ -286,11 +289,17 @@ class FlutterBoomPdfAdCorePlugins {
     }
   }
 
-  Future<void> _initializeNetwork(
+  Future<bool> _initializeNetwork(
     String id,
     FlutterBoomPdfAdAdapter adapter,
   ) async {
     await adapter.configure(_configurationFor(id));
+    if (id == _admobNetworkId &&
+        adapter.requiresConsentBeforeInitialization &&
+        _admobCanRequestAds == null) {
+      await handleUmpConsent();
+    }
+    if (!_networkCanRequestAds(id)) return false;
     await adapter.initialize();
     final initializationCompleted = adapter.initializationCompleted;
     if (initializationCompleted != null) {
@@ -307,9 +316,10 @@ class FlutterBoomPdfAdCorePlugins {
           },
         ),
       );
-      return;
+      return true;
     }
     _notifyNetworkInitialized(id);
+    return true;
   }
 
   void _notifyNetworkInitialized(String networkId) {
@@ -646,18 +656,27 @@ class FlutterBoomPdfAdCorePlugins {
     );
   }
 
+  /// Returns any valid cached entry without selecting an auction winner.
   Future<LoadedAdCacheEntry?> getCachedEntry<K>(
     K placement, {
     Object? adPosId,
   }) async {
     final key = placement as Object;
     await _evictExpired(key);
-    return _selectCachedEntry(key, adPosId: adPosId);
+    return _firstEntry(key);
+  }
+
+  /// Selects the winning cached entry only when it is about to be displayed.
+  Future<LoadedAdCacheEntry?> _getCachedEntryForDisplay(
+    Object placement, {
+    required Object adPosId,
+  }) async {
+    await _evictExpired(placement);
+    return _selectCachedEntry(placement, adPosId: adPosId);
   }
 
   Future<Object?> getCachedAd<K>(K placement) async {
-    final entry = await getCachedEntry(placement);
-    return entry?.rawAd;
+    return (await getCachedEntry(placement))?.rawAd;
   }
 
   Future<AdInfoBean?> getAvailableCachedAdInfo<K>(K placement) async {
@@ -666,7 +685,7 @@ class FlutterBoomPdfAdCorePlugins {
 
   Future<bool> canDisplayPlacement<K>(K placement) async {
     final key = placement as Object;
-    if (await getCachedEntry(key) != null) return true;
+    if (await getAvailableCachedAdInfo(key) != null) return true;
     final configs = await _resolveConfigs(key);
     return configs?.any(_isLoadableConfig) ?? false;
   }
@@ -676,7 +695,7 @@ class FlutterBoomPdfAdCorePlugins {
     required Object adPosId,
   }) async {
     final key = placement as Object;
-    final entry = await getCachedEntry(key, adPosId: adPosId);
+    final entry = await _getCachedEntryForDisplay(key, adPosId: adPosId);
     if (entry == null || !entry.ad.supportsWidget) {
       return null;
     }
@@ -697,7 +716,7 @@ class FlutterBoomPdfAdCorePlugins {
     Duration disposeDelay = const Duration(seconds: 2),
   }) async {
     final key = placement as Object;
-    var entry = await getCachedEntry(key, adPosId: adPosId);
+    var entry = await _getCachedEntryForDisplay(key, adPosId: adPosId);
     if (entry == null && loadIfNeeded) {
       entry = await loadPlacement<Object>(key, force: true);
     }
@@ -727,14 +746,14 @@ class FlutterBoomPdfAdCorePlugins {
   Future<bool?> showCachedAd<K>(
     K placement, {
     required Object adPosId,
-    BuildContext? context,
+    required BuildContext? context,
     OnUserEarnedRewardCallback? onUserEarnedReward,
   }) async {
     final key = placement as Object;
     if (_showingPlacements.contains(key)) {
       return false;
     }
-    final entry = await getCachedEntry(key, adPosId: adPosId);
+    final entry = await _getCachedEntryForDisplay(key, adPosId: adPosId);
     if (entry == null) {
       if (!_skipReloadAfterClosePlacements.contains(key)) {
         unawaited(loadPlacement<Object>(key));
@@ -800,7 +819,7 @@ class FlutterBoomPdfAdCorePlugins {
   Future<bool?> loadAndShow<K>(
     K placement, {
     required Object adPosId,
-    BuildContext? context,
+    required BuildContext? context,
     List<AdInfoBean>? configs,
     bool forceReload = false,
     OnUserEarnedRewardCallback? onUserEarnedReward,
@@ -902,6 +921,7 @@ class FlutterBoomPdfAdCorePlugins {
           return null;
         }
       }
+      if (!_networkCanRequestAds(networkId)) return null;
       final completer = Completer<LoadedAdCacheEntry?>();
       final started = <int>{};
       final completed = <int>{};
@@ -1125,6 +1145,12 @@ class FlutterBoomPdfAdCorePlugins {
       await Navigator.of(context).push(route);
       final programmatic = _programmaticClosingPlacements.remove(placement);
       _notifyClosed(placement, entry);
+      // A widget-backed ad may own an Android PlatformView. Its native
+      // dispose message is delivered while the route is being finalized.
+      // Wait until that frame has finished before consuming the entry and
+      // starting the replacement load; otherwise the old view can release
+      // the newly started ad object when both use the same ad unit id.
+      await WidgetsBinding.instance.endOfFrame;
       await _consumeEntry(placement, entry);
       return programmatic ? null : true;
     } finally {
@@ -1320,7 +1346,8 @@ class FlutterBoomPdfAdCorePlugins {
     final bestAdmob = _highestCachedRevenue(admobEntries);
     if (tradplusEntries.isEmpty) return bestAdmob ?? first;
     if (bestAdmob == null) {
-      return await _highestEstimatedRevenue(tradplusEntries) ?? first;
+      return await _highestEstimatedRevenue(placement, tradplusEntries) ??
+          first;
     }
 
     final tradplusWinners = <LoadedAdCacheEntry>[];
@@ -1328,6 +1355,13 @@ class FlutterBoomPdfAdCorePlugins {
       final candidate = tradplus.ad;
       if (candidate is! AdAuctionCandidate) continue;
       final auctionCandidate = candidate as AdAuctionCandidate;
+      _debugAuctionLog(
+        'admob与tradplus比价：\n'
+        '开始比价：placement=$placement，'
+        'admob adid=${bestAdmob.info.adId}，'
+        'admob price=${bestAdmob.estimatedRevenueMicros}，'
+        'tradplus adid=${tradplus.info.adId}',
+      );
       try {
         final tpWins = await auctionCandidate.winsAgainst(
           competitorRevenueMicros: bestAdmob.estimatedRevenueMicros,
@@ -1354,32 +1388,34 @@ class FlutterBoomPdfAdCorePlugins {
                 ),
         );
         if (tpWins == true) tradplusWinners.add(tradplus);
-        _log(
-          'auction placement=$placement admobMicros='
-          '${bestAdmob.estimatedRevenueMicros} tradplusAdId='
-          '${tradplus.info.adId} winner='
-          '${tpWins == null
-              ? 'unknown'
-              : tpWins
-              ? 'tradplus'
-              : 'admob'}',
+        _debugAuctionLog(
+          'admob与tradplus比价：\n'
+          '比价结果：placement=$placement，'
+          'admob adid=${bestAdmob.info.adId}，'
+          'admob price=${bestAdmob.estimatedRevenueMicros}，'
+          'tradplus adid=${tradplus.info.adId}，'
+          'winner=${tpWins == true ? 'tradplus' : 'admob'}',
         );
       } catch (error) {
-        _log(
-          'auction-failed placement=$placement tradplusAdId='
-          '${tradplus.info.adId} error=$error',
+        _debugAuctionLog(
+          'admob与tradplus比价：\n'
+          '比价结果：placement=$placement，'
+          'admob adid=${bestAdmob.info.adId}，'
+          'admob price=${bestAdmob.estimatedRevenueMicros}，'
+          'tradplus adid=${tradplus.info.adId}，'
+          'winner=admob，reason=比价异常：$error',
         );
       }
     }
     if (tradplusWinners.isEmpty) return bestAdmob;
 
     final winner =
-        await _highestEstimatedRevenue(tradplusWinners) ??
+        await _highestEstimatedRevenue(placement, tradplusWinners) ??
         tradplusWinners.first;
     _log(
       'tradplus-auction placement=$placement candidates='
       '${tradplusWinners.length} winnerAdId=${winner.info.adId}'
-      ' winnerMicros=${winner.info.price}',
+      ' winnerPrice=${winner.info.price}',
     );
     return winner;
   }
@@ -1396,6 +1432,7 @@ class FlutterBoomPdfAdCorePlugins {
   }
 
   Future<LoadedAdCacheEntry?> _highestEstimatedRevenue(
+    Object placement,
     List<LoadedAdCacheEntry> entries,
   ) async {
     LoadedAdCacheEntry? winner;
@@ -1408,10 +1445,33 @@ class FlutterBoomPdfAdCorePlugins {
         final value = await revenueCandidate.getEstimatedRevenueMicros();
         if (value == null || !value.isFinite || value < 0) continue;
         entry.info.price = value;
-        if (winner == null || value > winnerMicros) {
+        if (winner == null) {
+          winner = entry;
+          winnerMicros = value;
+          continue;
+        }
+
+        final previousWinner = winner;
+        final previousWinnerPrice = winnerMicros;
+        _debugAuctionLog(
+          'tradplus与tradplus比价：\n'
+          '开始比价：placement=$placement，'
+          'tradplus1 adid=${previousWinner.info.adId}，'
+          'tradplus1 price=$previousWinnerPrice，'
+          'tradplus2 adid=${entry.info.adId}，'
+          'tradplus2 price=$value',
+        );
+        if (value > previousWinnerPrice) {
           winner = entry;
           winnerMicros = value;
         }
+        _debugAuctionLog(
+          'tradplus与tradplus比价：\n'
+          '比价结果：placement=$placement，'
+          'tradplus1 adid=${previousWinner.info.adId}，'
+          'tradplus2 adid=${entry.info.adId}，'
+          'winner=${winner.info.adId}',
+        );
       } catch (error) {
         _log('estimated-revenue-failed adId=${entry.info.adId} error=$error');
       }
@@ -1521,6 +1581,10 @@ class FlutterBoomPdfAdCorePlugins {
 
   void _log(String message) {
     if (!kReleaseMode) debugPrint('[FlutterBoomPdfAdCore] $message');
+  }
+
+  void _debugAuctionLog(String message) {
+    if (kDebugMode) debugPrint(message);
   }
 
   void _debugAdLifecycleLog(
