@@ -456,6 +456,73 @@ void main() {
     expect(admob.loadCount, 1);
     expect(tradplus.loadCount, 2);
   });
+
+  test('an in-flight network does not block another network reload', () async {
+    final tradplusLoadCompleted = Completer<void>();
+    final admob = _FakeAdapter(networkId: 'admob');
+    final tradplus = _FakeAdapter(
+      networkId: 'tradplus',
+      loadFuture: tradplusLoadCompleted.future,
+    );
+    core
+      ..registerAdapter(admob)
+      ..registerAdapter(tradplus)
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
+      });
+
+    final initialLoad = core.loadPlacement('home', force: true);
+    for (
+      var attempt = 0;
+      attempt < 20 && (admob.loadCount == 0 || tradplus.loadCount == 0);
+      attempt++
+    ) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    expect(admob.loadCount, 1);
+    expect(tradplus.loadCount, 1);
+
+    await core.loadPlacement(
+      'home',
+      configs: <AdInfoBean>[_info('admob')],
+      force: true,
+    );
+
+    expect(admob.loadCount, 2);
+    expect(tradplus.loadCount, 1);
+
+    tradplusLoadCompleted.complete();
+    await initialLoad;
+  });
+
+  test(
+    'deduplicates concurrent loads for the same placement and network',
+    () async {
+      final admobLoadCompleted = Completer<void>();
+      final admob = _FakeAdapter(
+        networkId: 'admob',
+        loadFuture: admobLoadCompleted.future,
+      );
+      core
+        ..registerAdapter(admob)
+        ..updateConfigs<String>(<String, List<AdInfoBean>>{
+          'home': <AdInfoBean>[_info('admob')],
+        });
+
+      final firstLoad = core.loadPlacement('home', force: true);
+      final secondLoad = core.loadPlacement('home', force: true);
+      for (var attempt = 0; attempt < 20 && admob.loadCount == 0; attempt++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      expect(admob.loadCount, 1);
+
+      admobLoadCompleted.complete();
+      await Future.wait(<Future<LoadedAdCacheEntry?>>[firstLoad, secondLoad]);
+      expect(admob.loadCount, 1);
+    },
+  );
 }
 
 AdInfoBean _info(String networkId) => AdInfoBean(
@@ -493,6 +560,7 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
     this.umpCanRequestAds = true,
     this.requiresConsentBeforeInitialization = false,
     this.umpConsentFuture,
+    this.loadFuture,
   });
 
   @override
@@ -504,6 +572,7 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
   @override
   final bool requiresConsentBeforeInitialization;
   final Future<UmpConsentResult>? umpConsentFuture;
+  final Future<void>? loadFuture;
   @override
   final Future<void>? initializationCompleted;
   double? lastCompetitorRevenueMicros;
@@ -531,6 +600,7 @@ class _FakeAdapter extends FlutterBoomPdfAdAdapter {
   @override
   Future<AdLoadResult> load(AdLoadRequest request) async {
     loadCount++;
+    await loadFuture;
     final ad = networkId == 'tradplus'
         ? _FakeAuctionAd(
             networkId,

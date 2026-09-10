@@ -251,7 +251,7 @@ ads.updateSingleFillPlacements(<String>{
 1. 缓存里只有一个候选广告时直接返回，不发起比价。
 2. 多条 AdMob 缓存先按预估收益取最高值；每条 TradPlus 缓存都会分别与这条 AdMob 比较，因此超时后晚到的成功缓存也会参与。
 3. AdMob Adapter 在加载成功后把查询收益除以 `1000000`；Core 将这个已换算价格直接传给 TradPlus，Android 端调用 `TPOutcome().isTPW(admobPrice, tpAdInfo)`。
-4. 一条或多条 TradPlus 胜出后，Core 会逐条探测其美元 eCPM；只有一条时用于补齐运行时价格，多条时选择价格最高的一条。
+4. 一条或多条 TradPlus 胜出后，Adapter 会逐条获取其 eCPM 并除以 `1000` 后写入 `AdInfoBean.price`；只有一条时用于补齐运行时价格，多条时选择换算后价格最高的一条。
 5. `AdInfoBean.price` 是换算后的运行时比价价格，不会从配置 JSON 读取，也不会写回 JSON。
 
 AdMob 的预估收益由 `query_ad_revenue` 提供，当前支持 App Open、插屏和原生广告；查询结果统一除以 `1000000` 后写入缓存及 `AdInfoBean.price`。激励视频和 Banner 在 Release 中按 `0` 参与比较。Debug 模式下，如果查询值为 `0`（包括不支持的类型或查询异常），AdMob Adapter 会先从 `123000`、`1240000`、`12500000`、`126000000` 中随机取一个，再除以 `1000000`，后续所有比价复用该值。查询收益所需的 `.so` 仍放在业务 App，由 `QueryAdRevenueConfig.libName` 指定，不需要放进 AdMob Adapter。

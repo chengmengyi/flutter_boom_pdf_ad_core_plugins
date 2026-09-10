@@ -113,6 +113,133 @@ abstract class FlutterBoomPdfAdListener {
   void onTachi25TotalRevenueEvent(String eventName) {}
 }
 
+/// Displays one native ad for the lifetime of this widget.
+///
+/// Cache polling and ownership of the taken ad live here. Refresh timing,
+/// visibility rules, ad switches and chance tracking intentionally stay in the
+/// host app. Recreate this widget with a new key when the host decides to
+/// refresh the ad.
+class BoomNativeAdWidget<K> extends StatefulWidget {
+  const BoomNativeAdWidget({
+    super.key,
+    required this.placement,
+    required this.adPosId,
+    required this.placeholderBuilder,
+    this.pollInterval = const Duration(milliseconds: 500),
+    this.loadRetryInterval = const Duration(seconds: 10),
+    this.loadIfNeeded = true,
+    this.reloadAfterTake = false,
+    this.disposeDelay = const Duration(seconds: 2),
+    this.onAdLoaded,
+    this.onError,
+  });
+
+  final K placement;
+  final Object adPosId;
+  final WidgetBuilder placeholderBuilder;
+  final Duration pollInterval;
+  final Duration loadRetryInterval;
+  final bool loadIfNeeded;
+  final bool reloadAfterTake;
+  final Duration disposeDelay;
+  final VoidCallback? onAdLoaded;
+  final ValueChanged<Object>? onError;
+
+  @override
+  State<BoomNativeAdWidget<K>> createState() => _BoomNativeAdWidgetState<K>();
+}
+
+class _BoomNativeAdWidgetState<K> extends State<BoomNativeAdWidget<K>> {
+  Timer? _pollTimer;
+  Widget? _adWidget;
+  bool _isTakingAd = false;
+  bool _isLoading = false;
+  DateTime? _lastLoadStartedAt;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_tryTakeAvailableAd());
+    _pollTimer = Timer.periodic(
+      widget.pollInterval,
+      (_) => unawaited(_tryTakeAvailableAd()),
+    );
+  }
+
+  @override
+  void dispose() {
+    _stopPolling();
+    super.dispose();
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  Future<void> _startLoadIfNeeded() async {
+    if (!widget.loadIfNeeded || _isLoading) return;
+    final now = DateTime.now();
+    final lastLoadStartedAt = _lastLoadStartedAt;
+    if (lastLoadStartedAt != null &&
+        now.difference(lastLoadStartedAt) < widget.loadRetryInterval) {
+      return;
+    }
+    _lastLoadStartedAt = now;
+    _isLoading = true;
+    try {
+      await FlutterBoomPdfAdCorePlugins.instance.loadPlacement<K>(
+        widget.placement,
+      );
+      if (mounted && _adWidget == null) {
+        await _tryTakeAvailableAd();
+      }
+    } catch (error) {
+      widget.onError?.call(error);
+    } finally {
+      _isLoading = false;
+    }
+  }
+
+  Future<void> _tryTakeAvailableAd() async {
+    if (_adWidget != null || _isTakingAd) return;
+    _isTakingAd = true;
+    try {
+      final core = FlutterBoomPdfAdCorePlugins.instance;
+      final cachedInfo = await core.getAvailableCachedAdInfo<K>(
+        widget.placement,
+      );
+      if (cachedInfo == null) {
+        unawaited(_startLoadIfNeeded());
+        return;
+      }
+      final adWidget = await core.takeCachedAdWidget<K>(
+        widget.placement,
+        adPosId: widget.adPosId,
+        loadIfNeeded: false,
+        reloadAfterTake: widget.reloadAfterTake,
+        disposeDelay: widget.disposeDelay,
+      );
+      if (adWidget == null) return;
+      if (!mounted) {
+        await core.disposeTakenAdWidget(adWidget);
+        return;
+      }
+      _stopPolling();
+      setState(() => _adWidget = adWidget);
+      widget.onAdLoaded?.call();
+    } catch (error) {
+      widget.onError?.call(error);
+    } finally {
+      _isTakingAd = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _adWidget ?? widget.placeholderBuilder(context);
+}
+
 class FlutterBoomPdfAdCorePlugins {
   FlutterBoomPdfAdCorePlugins._();
 
@@ -162,7 +289,8 @@ class FlutterBoomPdfAdCorePlugins {
   final Map<Object, List<AdInfoBean>> _defaultConfigs = {};
   final Map<Object, List<AdInfoBean>> _facebookConfigs = {};
   final Map<Object, List<LoadedAdCacheEntry>> _cache = {};
-  final Map<Object, Future<LoadedAdCacheEntry?>> _loadingTasks = {};
+  final Map<(Object, String), Future<LoadedAdCacheEntry?>>
+  _networkLoadingTasks = {};
   final Set<Object> _interstitialLikeNativePlacements = {};
   final Set<Object> _smallTemplateNativePlacements = {};
   final Set<Object> _largeBannerPlacements = {};
@@ -172,6 +300,7 @@ class FlutterBoomPdfAdCorePlugins {
   final Set<Object> _showingPlacements = {};
   final Set<Object> _programmaticClosingPlacements = {};
   final Map<Object, Route<void>> _nativeRoutes = {};
+  final Map<Object, Future<void>> _nativeCloseTasks = {};
   final Map<Object, Set<VoidCallback>> _placementLoadedListeners = {};
   final Set<String> _cmpCountryCodes = {..._defaultCmpCountryCodes};
   final Random _debugRevenueRandom = Random();
@@ -330,15 +459,11 @@ class FlutterBoomPdfAdCorePlugins {
   Future<void> initializeAdmob() => initializeNetwork(_admobNetworkId);
 
   Future<void> updateAdjustAttribution({String? network}) async {
-    if (await AdAttributionManager.instance.updateNetwork(network)) {
-      await _clearAllCache();
-    }
+    await AdAttributionManager.instance.updateNetwork(network);
   }
 
   Future<void> updateInstallReferrer({String? referrer}) async {
-    if (await AdAttributionManager.instance.updateReferrer(referrer)) {
-      await _clearAllCache();
-    }
+    await AdAttributionManager.instance.updateReferrer(referrer);
   }
 
   Future<String?> getAndroidId() => AdUserGroupManager.instance.getAndroidId();
@@ -620,8 +745,6 @@ class FlutterBoomPdfAdCorePlugins {
     if (placementLabelBuilder != null) {
       configureLoader<K>(placementLabelBuilder: placementLabelBuilder);
     }
-    final inFlight = _loadingTasks[key];
-    if (inFlight != null) return inFlight;
     await _evictExpired(key);
     final cached = _firstEntry(key);
     if (!force && cached != null) return cached;
@@ -629,13 +752,7 @@ class FlutterBoomPdfAdCorePlugins {
     if (selected == null || selected.isEmpty) {
       return null;
     }
-    final task = _loadPlacementInternal(key, selected);
-    _loadingTasks[key] = task;
-    try {
-      return await task;
-    } finally {
-      if (identical(_loadingTasks[key], task)) _loadingTasks.remove(key);
-    }
+    return _loadPlacementInternal(key, selected);
   }
 
   Future<void> preloadAll<K>({
@@ -859,7 +976,7 @@ class FlutterBoomPdfAdCorePlugins {
 
   Future<void> disposeLoader() async {
     await _clearAllCache();
-    _loadingTasks.clear();
+    _networkLoadingTasks.clear();
     _showingPlacements.clear();
     _nativeRoutes.clear();
   }
@@ -901,179 +1018,197 @@ class FlutterBoomPdfAdCorePlugins {
 
     Future<LoadedAdCacheEntry?> loadNetwork(
       List<_IndexedAdConfig> networkConfigs,
-    ) async {
+    ) {
       final networkId = networkConfigs.first.info.normalizedNetworkId;
-      if (_adapters.containsKey(networkId)) {
-        try {
-          await initializeNetwork(networkId);
-        } catch (error) {
-          final info = networkConfigs.first.info;
-          final reason = 'network-initialize-failed:$error';
-          _debugAdLifecycleLog('load fail', placement, info, reason: reason);
-          _listener?.onAdRequestFailure(
-            placement,
-            info,
-            reason,
-            networkId,
-            networkId,
-            0,
-          );
-          return null;
-        }
-      }
-      if (!_networkCanRequestAds(networkId)) return null;
-      final completer = Completer<LoadedAdCacheEntry?>();
-      final started = <int>{};
-      final completed = <int>{};
-      final timers = <Timer>[];
+      final loadingKey = (placement, networkId);
+      final inFlight = _networkLoadingTasks[loadingKey];
+      if (inFlight != null) return inFlight;
 
-      bool allDone() =>
-          started.length == networkConfigs.length &&
-          completed.length == networkConfigs.length;
-
-      Future<void> start(int index) async {
-        if (index >= networkConfigs.length || !started.add(index)) return;
-        final indexedConfig = networkConfigs[index];
-        final info = indexedConfig.info;
-        final adapter = _adapters[info.normalizedNetworkId];
-        _debugAdLifecycleLog('start load', placement, info);
-        _listener?.onAdRequestStart(placement, info);
-        final delay = _requestFallbackDelay;
-        if (delay != null &&
-            !_singleFillPlacements.contains(placement) &&
-            index + 1 < networkConfigs.length) {
-          timers.add(Timer(delay, () => unawaited(start(index + 1))));
-        }
-        final stopwatch = Stopwatch()..start();
-        AdLoadResult result;
-        if (adapter == null) {
-          result = AdLoadResult.failure(
-            'adapter-not-registered:${info.normalizedNetworkId}',
-            adNetwork: info.normalizedNetworkId,
-          );
-        } else if (!adapter.supports(info.parsedAdType!)) {
-          result = AdLoadResult.failure(
-            'unsupported-ad-type:${info.adType}',
-            adNetwork: info.normalizedNetworkId,
-          );
-        } else {
+      Future<LoadedAdCacheEntry?> performLoad() async {
+        if (_adapters.containsKey(networkId)) {
           try {
-            result = await adapter.load(
-              AdLoadRequest(
-                placement: placement,
-                info: info,
-                interstitialLikeNative: _interstitialLikeNativePlacements
-                    .contains(placement),
-                smallTemplateNative: _smallTemplateNativePlacements.contains(
-                  placement,
-                ),
-                largeBanner: _largeBannerPlacements.contains(placement),
-                collapsibleBannerDirection:
-                    _collapsibleBannerDirections[placement],
-                networkOptions:
-                    _networkOptions[info.normalizedNetworkId] ?? const {},
-              ),
-            );
+            await initializeNetwork(networkId);
           } catch (error) {
+            final info = networkConfigs.first.info;
+            final reason = 'network-initialize-failed:$error';
+            _debugAdLifecycleLog('load fail', placement, info, reason: reason);
+            _listener?.onAdRequestFailure(
+              placement,
+              info,
+              reason,
+              networkId,
+              networkId,
+              0,
+            );
+            return null;
+          }
+        }
+        if (!_networkCanRequestAds(networkId)) return null;
+        final completer = Completer<LoadedAdCacheEntry?>();
+        final started = <int>{};
+        final completed = <int>{};
+        final timers = <Timer>[];
+
+        bool allDone() =>
+            started.length == networkConfigs.length &&
+            completed.length == networkConfigs.length;
+
+        Future<void> start(int index) async {
+          if (index >= networkConfigs.length || !started.add(index)) return;
+          final indexedConfig = networkConfigs[index];
+          final info = indexedConfig.info;
+          final adapter = _adapters[info.normalizedNetworkId];
+          _debugAdLifecycleLog('start load', placement, info);
+          _listener?.onAdRequestStart(placement, info);
+          final delay = _requestFallbackDelay;
+          if (delay != null &&
+              !_singleFillPlacements.contains(placement) &&
+              index + 1 < networkConfigs.length) {
+            timers.add(Timer(delay, () => unawaited(start(index + 1))));
+          }
+          final stopwatch = Stopwatch()..start();
+          AdLoadResult result;
+          if (adapter == null) {
             result = AdLoadResult.failure(
-              'exception=$error',
+              'adapter-not-registered:${info.normalizedNetworkId}',
               adNetwork: info.normalizedNetworkId,
             );
+          } else if (!adapter.supports(info.parsedAdType!)) {
+            result = AdLoadResult.failure(
+              'unsupported-ad-type:${info.adType}',
+              adNetwork: info.normalizedNetworkId,
+            );
+          } else {
+            try {
+              result = await adapter.load(
+                AdLoadRequest(
+                  placement: placement,
+                  info: info,
+                  interstitialLikeNative: _interstitialLikeNativePlacements
+                      .contains(placement),
+                  smallTemplateNative: _smallTemplateNativePlacements.contains(
+                    placement,
+                  ),
+                  largeBanner: _largeBannerPlacements.contains(placement),
+                  collapsibleBannerDirection:
+                      _collapsibleBannerDirections[placement],
+                  networkOptions:
+                      _networkOptions[info.normalizedNetworkId] ?? const {},
+                ),
+              );
+            } catch (error) {
+              result = AdLoadResult.failure(
+                'exception=$error',
+                adNetwork: info.normalizedNetworkId,
+              );
+            }
           }
-        }
-        stopwatch.stop();
-        completed.add(index);
-        final seconds =
-            stopwatch.elapsedMicroseconds / Duration.microsecondsPerSecond;
-        final ad = result.ad;
-        if (ad == null) {
-          _debugAdLifecycleLog(
-            'load fail',
-            placement,
-            info,
-            reason: result.failureReason ?? 'unknown',
+          stopwatch.stop();
+          completed.add(index);
+          final seconds =
+              stopwatch.elapsedMicroseconds / Duration.microsecondsPerSecond;
+          final ad = result.ad;
+          if (ad == null) {
+            _debugAdLifecycleLog(
+              'load fail',
+              placement,
+              info,
+              reason: result.failureReason ?? 'unknown',
+            );
+            _listener?.onAdRequestFailure(
+              placement,
+              info,
+              result.failureReason ?? 'unknown',
+              result.adNetwork ?? info.normalizedNetworkId,
+              result.adSourceName ??
+                  result.adNetwork ??
+                  info.normalizedNetworkId,
+              seconds,
+            );
+            if (index + 1 < networkConfigs.length) {
+              unawaited(start(index + 1));
+            }
+            if (allDone() && !completer.isCompleted) {
+              completer.complete(null);
+            }
+            return;
+          }
+          if (!_networkCanRequestAds(info.normalizedNetworkId)) {
+            await ad.dispose();
+            _debugAdLifecycleLog(
+              'load fail',
+              placement,
+              info,
+              reason: 'ump-cannot-request-ads',
+            );
+            _listener?.onAdRequestFailure(
+              placement,
+              info,
+              'ump-cannot-request-ads',
+              result.adNetwork ?? info.normalizedNetworkId,
+              result.adSourceName ??
+                  result.adNetwork ??
+                  info.normalizedNetworkId,
+              seconds,
+            );
+            if (index + 1 < networkConfigs.length) {
+              unawaited(start(index + 1));
+            }
+            if (allDone() && !completer.isCompleted) {
+              completer.complete(null);
+            }
+            return;
+          }
+          info.price = result.estimatedRevenueMicros;
+          final entry = LoadedAdCacheEntry(
+            info: info,
+            ad: ad,
+            estimatedRevenueMicros: result.estimatedRevenueMicros,
+            cachedAt: DateTime.now(),
+            requestOrder: indexedConfig.requestOrder,
           );
-          _listener?.onAdRequestFailure(
+          if (_singleFillPlacements.contains(placement) && hasSuccess) {
+            await entry.dispose();
+            if (!completer.isCompleted) completer.complete(null);
+            return;
+          }
+          hasSuccess = true;
+          _insertEntry(placement, entry);
+          entry.eventSubscription = ad.events.listen(
+            (event) => _handleNetworkEvent(placement, entry, event),
+          );
+          _debugAdLifecycleLog('load success', placement, info);
+          _listener?.onAdRequestSuccess(
             placement,
             info,
-            result.failureReason ?? 'unknown',
-            result.adNetwork ?? info.normalizedNetworkId,
-            result.adSourceName ?? result.adNetwork ?? info.normalizedNetworkId,
+            ad.adNetwork,
+            ad.adSourceName,
             seconds,
           );
-          if (index + 1 < networkConfigs.length) {
-            unawaited(start(index + 1));
+          final listeners = _placementLoadedListeners[placement];
+          if (listeners != null) {
+            for (final listener in List<VoidCallback>.from(listeners)) {
+              listener();
+            }
           }
-          if (allDone() && !completer.isCompleted) {
-            completer.complete(null);
-          }
-          return;
+          if (!completer.isCompleted) completer.complete(entry);
         }
-        if (!_networkCanRequestAds(info.normalizedNetworkId)) {
-          await ad.dispose();
-          _debugAdLifecycleLog(
-            'load fail',
-            placement,
-            info,
-            reason: 'ump-cannot-request-ads',
-          );
-          _listener?.onAdRequestFailure(
-            placement,
-            info,
-            'ump-cannot-request-ads',
-            result.adNetwork ?? info.normalizedNetworkId,
-            result.adSourceName ?? result.adNetwork ?? info.normalizedNetworkId,
-            seconds,
-          );
-          if (index + 1 < networkConfigs.length) {
-            unawaited(start(index + 1));
-          }
-          if (allDone() && !completer.isCompleted) {
-            completer.complete(null);
-          }
-          return;
+
+        unawaited(start(0));
+        final result = await completer.future;
+        for (final timer in timers) {
+          timer.cancel();
         }
-        info.price = result.estimatedRevenueMicros;
-        final entry = LoadedAdCacheEntry(
-          info: info,
-          ad: ad,
-          estimatedRevenueMicros: result.estimatedRevenueMicros,
-          cachedAt: DateTime.now(),
-          requestOrder: indexedConfig.requestOrder,
-        );
-        if (_singleFillPlacements.contains(placement) && hasSuccess) {
-          await entry.dispose();
-          if (!completer.isCompleted) completer.complete(null);
-          return;
-        }
-        hasSuccess = true;
-        _insertEntry(placement, entry);
-        entry.eventSubscription = ad.events.listen(
-          (event) => _handleNetworkEvent(placement, entry, event),
-        );
-        _debugAdLifecycleLog('load success', placement, info);
-        _listener?.onAdRequestSuccess(
-          placement,
-          info,
-          ad.adNetwork,
-          ad.adSourceName,
-          seconds,
-        );
-        final listeners = _placementLoadedListeners[placement];
-        if (listeners != null) {
-          for (final listener in List<VoidCallback>.from(listeners)) {
-            listener();
-          }
-        }
-        if (!completer.isCompleted) completer.complete(entry);
+        return result;
       }
 
-      unawaited(start(0));
-      final result = await completer.future;
-      for (final timer in timers) {
-        timer.cancel();
-      }
-      return result;
+      final task = performLoad();
+      _networkLoadingTasks[loadingKey] = task;
+      return task.whenComplete(() {
+        if (identical(_networkLoadingTasks[loadingKey], task)) {
+          _networkLoadingTasks.remove(loadingKey);
+        }
+      });
     }
 
     final networkResults = await Future.wait(
@@ -1144,16 +1279,16 @@ class FlutterBoomPdfAdCorePlugins {
     try {
       await Navigator.of(context).push(route);
       final programmatic = _programmaticClosingPlacements.remove(placement);
-      _notifyClosed(placement, entry);
-      // A widget-backed ad may own an Android PlatformView. Its native
-      // dispose message is delivered while the route is being finalized.
-      // Wait until that frame has finished before consuming the entry and
-      // starting the replacement load; otherwise the old view can release
-      // the newly started ad object when both use the same ad unit id.
-      await WidgetsBinding.instance.endOfFrame;
-      await _consumeEntry(placement, entry);
+      final nativeCloseTask = _nativeCloseTasks.remove(placement);
+      if (nativeCloseTask != null) {
+        await nativeCloseTask;
+      } else {
+        _notifyClosed(placement, entry);
+        await _disposeNativeRouteAndConsume(placement, entry);
+      }
       return programmatic ? null : true;
     } finally {
+      _nativeCloseTasks.remove(placement);
       _nativeRoutes.remove(placement);
       _showingPlacements.remove(placement);
     }
@@ -1187,11 +1322,39 @@ class FlutterBoomPdfAdCorePlugins {
         final route = _nativeRoutes[placement];
         final navigator = route?.navigator;
         if (route != null && route.isActive && navigator != null) {
-          navigator.removeRoute(route);
+          _nativeCloseTasks.putIfAbsent(
+            placement,
+            () =>
+                _closeNativeRouteAndConsume(placement, entry, route, navigator),
+          );
         }
       case AdNetworkEventType.paid:
         unawaited(_handlePaidEvent(placement, entry, event));
     }
+  }
+
+  Future<void> _closeNativeRouteAndConsume(
+    Object placement,
+    LoadedAdCacheEntry entry,
+    Route<void> route,
+    NavigatorState navigator,
+  ) async {
+    if (route.isActive) {
+      navigator.removeRoute(route);
+    }
+    await _disposeNativeRouteAndConsume(placement, entry);
+  }
+
+  Future<void> _disposeNativeRouteAndConsume(
+    Object placement,
+    LoadedAdCacheEntry entry,
+  ) async {
+    // Widget-backed ads may own an Android PlatformView. Its native dispose
+    // message is delivered while the retiring route is being finalized. Wait
+    // for that frame before reloading the same ad unit, otherwise the old
+    // PlatformView can release the newly created native ad object.
+    await WidgetsBinding.instance.endOfFrame;
+    await _consumeEntry(placement, entry);
   }
 
   Future<void> _handlePaidEvent(
