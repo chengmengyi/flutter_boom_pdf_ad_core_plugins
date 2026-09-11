@@ -1,7 +1,7 @@
 name: flutter_boom_pdf_ad_core_plugins
 description: "Provider-neutral ad orchestration core for Boom PDF apps."
 version: 0.0.1
-homepage:
+homepage: https://github.com/chengmengyi/flutter_boom_pdf_ad_core_plugins
 
 environment:
   sdk: ^3.9.2
