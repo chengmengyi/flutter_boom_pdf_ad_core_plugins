@@ -49,6 +49,31 @@ void main() {
     expect(selected?.ad.networkId, 'admob');
   });
 
+  test('rechecks the presentation guard after selecting cached ad', () async {
+    final admob = _MultiFakeAdapter(
+      networkId: 'admob',
+      revenues: <String, double>{'admob-only': 2500000},
+    );
+    core
+      ..registerAdapter(admob)
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_infoWithId('admob', 'admob-only')],
+      });
+
+    await core.loadPlacement('home', force: true);
+    var guardChecks = 0;
+    final shown = await core.showCachedAd(
+      'home',
+      adPosId: 'guard-pos',
+      context: null,
+      canShow: () => ++guardChecks == 1,
+    );
+
+    expect(shown, isFalse);
+    expect(admob.shownAdIds, isEmpty);
+    expect(await core.getAvailableCachedAdInfo('home'), isNotNull);
+  });
+
   test('checks cache availability without running an auction', () async {
     final admob = _FakeAdapter(
       networkId: 'admob',
@@ -339,8 +364,8 @@ void main() {
       expect(tradplus.competitorPrices, <double>[4000000, 4000000]);
       expect(tradplus.estimatedPriceRequests, <String>['tp-1', 'tp-2']);
       expect(listener.starts, <String>[
-        'home:auction-pos:tradplus|admob-2:4000000.0|tp-1:5000000.0',
-        'home:auction-pos:tradplus|admob-2:4000000.0|tp-2:7000000.0',
+        'home:auction-pos:admob:tradplus|admob-2:4000000.0|tp-1:5000000.0',
+        'home:auction-pos:admob:tradplus|admob-2:4000000.0|tp-2:7000000.0',
       ]);
       expect(listener.overs, <String>[
         'home:auction-pos:tradplus|tp-1:5000000.0',
@@ -385,7 +410,7 @@ void main() {
       expect(tradplus.shownAdIds, <String>['tp-only']);
       expect(tradplus.estimatedPriceRequests, <String>['tp-only']);
       expect(listener.starts, <String>[
-        'home:auction-pos:tradplus|'
+        'home:auction-pos:admob:tradplus|'
             'admob-only:2000000.0|tp-only:3500000.0',
       ]);
       expect(listener.overs, <String>[
@@ -456,6 +481,39 @@ void main() {
     expect(admob.loadCount, 1);
     expect(tradplus.loadCount, 2);
   });
+
+  test(
+    'reloads every configured network that has no cache after show',
+    () async {
+      final admob = _FakeAdapter(networkId: 'admob');
+      final tradplus = _FakeAdapter(networkId: 'tradplus');
+      core
+        ..registerAdapter(admob)
+        ..registerAdapter(tradplus)
+        ..updateConfigs<String>(<String, List<AdInfoBean>>{
+          'home': <AdInfoBean>[_info('admob')],
+        });
+
+      await core.loadPlacement('home', force: true);
+      core.updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('admob'), _info('tradplus')],
+      });
+      expect(
+        await core.showCachedAd('home', adPosId: 'test', context: null),
+        isTrue,
+      );
+      for (
+        var attempt = 0;
+        attempt < 20 && (admob.loadCount < 2 || tradplus.loadCount < 1);
+        attempt++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+
+      expect(admob.loadCount, 2);
+      expect(tradplus.loadCount, 1);
+    },
+  );
 
   test('an in-flight network does not block another network reload', () async {
     final tradplusLoadCompleted = Completer<void>();
@@ -634,12 +692,13 @@ class _BidListener extends FlutterBoomPdfAdListener {
   void bidStart(
     Object placement,
     Object adPosId,
-    String adNetwork,
+    String adNetworkAdmob,
+    String adNetworkTradplus,
     AdInfoBean admobInfo,
     AdInfoBean tradplusInfo,
   ) {
     starts.add(
-      '$placement:$adPosId:$adNetwork|'
+      '$placement:$adPosId:$adNetworkAdmob:$adNetworkTradplus|'
       '${admobInfo.adId}:${admobInfo.price}|'
       '${tradplusInfo.adId}:${tradplusInfo.price}',
     );

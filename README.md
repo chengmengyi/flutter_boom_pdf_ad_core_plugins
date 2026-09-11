@@ -443,12 +443,15 @@ class AppAdListener extends FlutterBoomPdfAdListener {
   void bidStart(
     Object placement,
     Object adPosId,
-    String adNetwork,
+    String adNetworkAdmob,
+    String adNetworkTradplus,
     AdInfoBean admobInfo,
     AdInfoBean tradplusInfo,
   ) {
     debugPrint(
-      '开始比价：$placement/$adPosId/$adNetwork，'
+      '开始比价：$placement/$adPosId，'
+      'AdMobNetwork=$adNetworkAdmob，'
+      'TradPlusNetwork=$adNetworkTradplus，'
       'AdMob=${admobInfo.adId}/${admobInfo.price}，'
       'TradPlus=${tradplusInfo.adId}/${tradplusInfo.price}',
     );
@@ -533,7 +536,7 @@ class AppAdListener extends FlutterBoomPdfAdListener {
 }
 ```
 
-`bidStart` 的 `adNetwork` 是当前参与比较的 TradPlus 广告实际网络；`bidOver` 的 `adNetwork` 是本次胜出广告的实际网络。Core 只在调用方提供真实 `adPosId` 的展示或 Widget 获取流程中触发这两个回调；直接调用不带 `adPosId` 的 `getCachedEntry`、`getCachedAd` 等查询接口仍会完成缓存比价，但不会发送比价事件。
+`bidStart` 的 `adNetworkAdmob` 和 `adNetworkTradplus` 分别是两条候选广告的实际网络，对应平台不存在或网络名不可用时为空字符串；`bidOver` 的 `adNetwork` 是本次胜出广告的实际网络。Core 只在调用方提供真实 `adPosId` 的展示或 Widget 获取流程中触发这两个回调；直接调用不带 `adPosId` 的 `getCachedEntry`、`getCachedAd` 等查询接口仍会完成缓存比价，但不会发送比价事件。
 
 主要生命周期回调：
 

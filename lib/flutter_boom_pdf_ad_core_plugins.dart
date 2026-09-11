@@ -22,12 +22,13 @@ export 'src/model/ad_type.dart';
 abstract class FlutterBoomPdfAdListener {
   const FlutterBoomPdfAdListener();
 
-  /// Called before each AdMob-versus-TradPlus comparison. Both prices are
-  /// populated in revenue micros.
+  /// Called before each AdMob-versus-TradPlus comparison. Each network name
+  /// belongs to its corresponding platform and is empty when unavailable.
   void bidStart(
     Object placement,
     Object adPosId,
-    String adNetwork,
+    String adNetworkAdmob,
+    String adNetworkTradplus,
     AdInfoBean admobInfo,
     AdInfoBean tradplusInfo,
   ) {}
@@ -860,14 +861,21 @@ class FlutterBoomPdfAdCorePlugins {
     if (widget is _ConsumableAdWidget) await widget.handle.disposeNow();
   }
 
+  /// [canShow] is checked again after asynchronous cache selection and daily
+  /// limit work, immediately before presentation. Returning false keeps the
+  /// selected ad cached and cancels only this display opportunity.
   Future<bool?> showCachedAd<K>(
     K placement, {
     required Object adPosId,
     required BuildContext? context,
     OnUserEarnedRewardCallback? onUserEarnedReward,
+    bool Function()? canShow,
   }) async {
     final key = placement as Object;
     if (_showingPlacements.contains(key)) {
+      return false;
+    }
+    if (canShow?.call() == false) {
       return false;
     }
     final entry = await _getCachedEntryForDisplay(key, adPosId: adPosId);
@@ -877,10 +885,19 @@ class FlutterBoomPdfAdCorePlugins {
       }
       return false;
     }
+    // Cache selection can await platform revenue queries. Recheck immediately
+    // afterwards so callers can invalidate an opportunity while the auction
+    // is running (for example, when the app moves to the background).
+    if (canShow?.call() == false) {
+      return false;
+    }
     entry.bindAdPosId(adPosId);
     if (entry.info.parsedAdType == AdType.appOpen &&
         !await AdDailyCountManager.instance.canLoadAd()) {
       _debugAdLifecycleLog('show fail', key, entry.info);
+      return false;
+    }
+    if (canShow?.call() == false) {
       return false;
     }
     if (entry.info.parsedAdType == AdType.native ||
@@ -1426,34 +1443,40 @@ class FlutterBoomPdfAdCorePlugins {
   }
 
   Future<void> _consumeEntry(Object placement, LoadedAdCacheEntry entry) async {
-    final consumedNetworkId = entry.info.normalizedNetworkId;
     _removeEntry(placement, entry);
     await entry.dispose();
     if (!_skipReloadAfterClosePlacements.contains(placement)) {
-      unawaited(_reloadConsumedNetwork(placement, consumedNetworkId));
+      unawaited(_reloadMissingNetworks(placement));
     }
   }
 
-  Future<void> _reloadConsumedNetwork(
-    Object placement,
-    String networkId,
-  ) async {
+  Future<void> _reloadMissingNetworks(Object placement) async {
     try {
       final configs = await _resolveConfigs(placement);
-      final networkConfigs = configs
-          ?.where((info) => info.normalizedNetworkId == networkId)
-          .toList(growable: false);
-      if (networkConfigs == null || networkConfigs.isEmpty) return;
-      await loadPlacement<Object>(
-        placement,
-        configs: networkConfigs,
-        force: true,
+      if (configs == null || configs.isEmpty) return;
+      final cachedNetworkIds =
+          (_cache[placement] ?? const <LoadedAdCacheEntry>[])
+              .map((entry) => entry.info.normalizedNetworkId)
+              .toSet();
+      final missingConfigsByNetwork = <String, List<AdInfoBean>>{};
+      for (final info in configs) {
+        final networkId = info.normalizedNetworkId;
+        if (cachedNetworkIds.contains(networkId)) continue;
+        missingConfigsByNetwork
+            .putIfAbsent(networkId, () => <AdInfoBean>[])
+            .add(info);
+      }
+      await Future.wait(
+        missingConfigsByNetwork.values.map(
+          (networkConfigs) => loadPlacement<Object>(
+            placement,
+            configs: networkConfigs,
+            force: true,
+          ),
+        ),
       );
     } catch (error) {
-      _log(
-        'reload-after-close-failed placement=$placement '
-        'network=$networkId error=$error',
-      );
+      _log('reload-after-close-failed placement=$placement error=$error');
     }
   }
 
@@ -1535,6 +1558,7 @@ class FlutterBoomPdfAdCorePlugins {
               : (admobInfo, tradplusInfo) => _listener?.bidStart(
                   placement,
                   adPosId,
+                  bestAdmob.ad.adNetwork,
                   tradplus.ad.adNetwork,
                   admobInfo,
                   tradplusInfo,
