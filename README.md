@@ -250,7 +250,7 @@ ads.updateSingleFillPlacements(<String>{
 
 1. 缓存里只有一个候选广告时直接返回，不发起比价。
 2. 多条 AdMob 缓存先按预估收益取最高值；每条 TradPlus 缓存都会分别与这条 AdMob 比较，因此超时后晚到的成功缓存也会参与。
-3. AdMob Adapter 在加载成功后把查询收益除以 `1000000`；Core 将这个已换算价格直接传给 TradPlus，Android 端调用 `TPOutcome().isTPW(admobPrice, tpAdInfo)`。
+3. AdMob Adapter 在加载成功后把查询收益除以 `1000000` 得到单次展示价格；TradPlus Adapter 调用 Android `TPOutcome().isTPW(admobPrice, tpAdInfo)` 前再乘以 `1000` 转成 eCPM。`bidStart`、`bidOver` 和 `AdInfoBean.price` 始终保留单次展示价格。
 4. 一条或多条 TradPlus 胜出后，Adapter 会逐条获取其 eCPM 并除以 `1000` 后写入 `AdInfoBean.price`；只有一条时用于补齐运行时价格，多条时选择换算后价格最高的一条。
 5. `AdInfoBean.price` 是换算后的运行时比价价格，不会从配置 JSON 读取，也不会写回 JSON。
 

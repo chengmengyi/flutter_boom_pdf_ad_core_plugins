@@ -1541,28 +1541,31 @@ class FlutterBoomPdfAdCorePlugins {
       final candidate = tradplus.ad;
       if (candidate is! AdAuctionCandidate) continue;
       final auctionCandidate = candidate as AdAuctionCandidate;
-      _debugAuctionLog(
-        'admob与tradplus比价：\n'
-        '开始比价：placement=$placement，'
-        'admob adid=${bestAdmob.info.adId}，'
-        'admob price=${bestAdmob.estimatedRevenueMicros}，'
-        'tradplus adid=${tradplus.info.adId}',
-      );
       try {
         final tpWins = await auctionCandidate.winsAgainst(
           competitorRevenueMicros: bestAdmob.estimatedRevenueMicros,
           competitorInfo: bestAdmob.info,
           candidateInfo: tradplus.info,
-          onBidStart: adPosId == null
-              ? null
-              : (admobInfo, tradplusInfo) => _listener?.bidStart(
-                  placement,
-                  adPosId,
-                  bestAdmob.ad.adNetwork,
-                  tradplus.ad.adNetwork,
-                  admobInfo,
-                  tradplusInfo,
-                ),
+          onBidStart: (admobInfo, tradplusInfo) {
+            _debugAuctionLog(
+              'admob与tradplus比价：\n'
+              '开始比价：placement=$placement，'
+              'admob adid=${bestAdmob.info.adId}，'
+              'admob ecpm=${_priceToEcpm(admobInfo.price)}，'
+              'tradplus adid=${tradplus.info.adId}，'
+              'tradplus ecpm=${_priceToEcpm(tradplusInfo.price)}',
+            );
+            if (adPosId != null) {
+              _listener?.bidStart(
+                placement,
+                adPosId,
+                bestAdmob.ad.adNetwork,
+                tradplus.ad.adNetwork,
+                admobInfo,
+                tradplusInfo,
+              );
+            }
+          },
           onBidOver: adPosId == null
               ? null
               : (winnerInfo) => _listener?.bidOver(
@@ -1579,8 +1582,9 @@ class FlutterBoomPdfAdCorePlugins {
           'admob与tradplus比价：\n'
           '比价结果：placement=$placement，'
           'admob adid=${bestAdmob.info.adId}，'
-          'admob price=${bestAdmob.estimatedRevenueMicros}，'
+          'admob ecpm=${_priceToEcpm(bestAdmob.info.price)}，'
           'tradplus adid=${tradplus.info.adId}，'
+          'tradplus ecpm=${_priceToEcpm(tradplus.info.price)}，'
           'winner=${tpWins == true ? 'tradplus' : 'admob'}',
         );
       } catch (error) {
@@ -1588,8 +1592,9 @@ class FlutterBoomPdfAdCorePlugins {
           'admob与tradplus比价：\n'
           '比价结果：placement=$placement，'
           'admob adid=${bestAdmob.info.adId}，'
-          'admob price=${bestAdmob.estimatedRevenueMicros}，'
+          'admob ecpm=${_priceToEcpm(bestAdmob.info.price)}，'
           'tradplus adid=${tradplus.info.adId}，'
+          'tradplus ecpm=${_priceToEcpm(tradplus.info.price)}，'
           'winner=admob，reason=比价异常：$error',
         );
       }
@@ -1602,7 +1607,7 @@ class FlutterBoomPdfAdCorePlugins {
     _log(
       'tradplus-auction placement=$placement candidates='
       '${tradplusWinners.length} winnerAdId=${winner.info.adId}'
-      ' winnerPrice=${winner.info.price}',
+      ' winnerEcpm=${_priceToEcpm(winner.info.price)}',
     );
     return winner;
   }
@@ -1644,9 +1649,9 @@ class FlutterBoomPdfAdCorePlugins {
           'tradplus与tradplus比价：\n'
           '开始比价：placement=$placement，'
           'tradplus1 adid=${previousWinner.info.adId}，'
-          'tradplus1 price=$previousWinnerPrice，'
+          'tradplus1 ecpm=${_priceToEcpm(previousWinnerPrice)}，'
           'tradplus2 adid=${entry.info.adId}，'
-          'tradplus2 price=$value',
+          'tradplus2 ecpm=${_priceToEcpm(value)}',
         );
         if (value > previousWinnerPrice) {
           winner = entry;
@@ -1665,6 +1670,8 @@ class FlutterBoomPdfAdCorePlugins {
     }
     return winner;
   }
+
+  double _priceToEcpm(double price) => price * 1000;
 
   void _removeEntry(Object placement, LoadedAdCacheEntry entry) {
     final entries = _cache[placement];
