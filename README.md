@@ -97,6 +97,12 @@ Future<void> main() async {
     distinctId: 'CURRENT_USER_ID',
     smallNativeAdLayoutName: 'smallNativeAd',
     nativeAdChoicesPlacement: AdChoicesPlacement.bottomLeftCorner,
+    nativeAdHeadlineCallback: ({
+      required String? headline,
+      required bool isNextGenAdmob,
+    }) {
+      debugPrint('原生广告标题：$headline');
+    },
   );
 
   // 5. 设置广告位。实际项目一般由服务端配置转换而来。
@@ -533,6 +539,21 @@ class AppAdListener extends FlutterBoomPdfAdListener {
   ) {
     debugPrint('$placement 收益：$revenue $currencyCode / $adNetwork');
   }
+
+  @override
+  void onNativeAdHeadline(
+    Object placement,
+    AdInfoBean info,
+    String platform,
+    String adNetwork,
+    String? headline,
+    bool isNextGenAdmob,
+  ) {
+    debugPrint(
+      '$placement 原生广告标题：$headline，'
+      'platform=$platform，adNetwork=$adNetwork，adId=${info.adId}',
+    );
+  }
 }
 ```
 
@@ -544,8 +565,13 @@ class AppAdListener extends FlutterBoomPdfAdListener {
 - `onAdShowStart`、`onAdShowSuccess`、`onAdShowFailure`
 - `onAdClicked`、`onAdClosed`
 - `onAdPaidEvent`
+- `onNativeAdHeadline`
 - `onNetworkInitialized`
 - `bidStart`、`bidOver`（TradPlus 与 AdMob 开始/结束比价）
+
+`initPlugins.nativeAdHeadlineCallback` 与旧插件的参数保持一致，适合已有业务直接迁移；`onNativeAdHeadline` 额外提供 `placement`、广告配置、平台和实际聚合广告网络。若两者同时配置，同一次标题事件会分别触发一次，埋点业务通常选择其中一种即可。
+
+标题由最终展示的原生广告上报，不会在缓存加载成功时上报，因此多平台同时缓存和比价时只会上报真正渲染/曝光的胜出广告。每条缓存最多上报一次。AdMob 当前对 `full_screen_native`、`guide_compact_native` 两种自定义 Factory 生效；使用 Google 内置 `NativeTemplateStyle` 时 SDK 没有提供标题回传入口。TradPlus 在原生广告曝光时读取当前创意标题；SDK 返回空值或无法取得标题时，仍以 `headline=null` 回调，避免影响广告展示。当前两个 Adapter 的 `isNextGenAdmob` 都为 `false`，与旧插件行为一致。
 
 ## 9. 只接入一个平台
 

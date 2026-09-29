@@ -130,7 +130,7 @@ class AdShowResult {
 
 typedef ShowAdResult = AdShowResult;
 
-enum AdNetworkEventType { impression, clicked, closed, paid }
+enum AdNetworkEventType { impression, clicked, closed, paid, nativeHeadline }
 
 class AdNetworkEvent {
   const AdNetworkEvent._(
@@ -138,6 +138,8 @@ class AdNetworkEvent {
     this.valueMicros,
     this.currencyCode,
     this.precisionType,
+    this.headline,
+    this.isNextGenAdmob = false,
   });
 
   const AdNetworkEvent.impression() : this._(AdNetworkEventType.impression);
@@ -153,11 +155,21 @@ class AdNetworkEvent {
          currencyCode: currencyCode,
          precisionType: precisionType,
        );
+  const AdNetworkEvent.nativeHeadline({
+    required String? headline,
+    bool isNextGenAdmob = false,
+  }) : this._(
+         AdNetworkEventType.nativeHeadline,
+         headline: headline,
+         isNextGenAdmob: isNextGenAdmob,
+       );
 
   final AdNetworkEventType type;
   final double? valueMicros;
   final String? currencyCode;
   final String? precisionType;
+  final String? headline;
+  final bool isNextGenAdmob;
 }
 
 /// Optional capability implemented by an ad whose SDK owns the final auction

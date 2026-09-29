@@ -19,6 +19,15 @@ export 'src/model/ad_info_bean.dart';
 export 'src/model/ad_models.dart';
 export 'src/model/ad_type.dart';
 
+/// Receives the headline of the native creative that is actually rendered.
+///
+/// The shape intentionally matches the callback exposed by the legacy plugin.
+typedef NativeAdHeadlineCallback =
+    FutureOr<void> Function({
+      required String? headline,
+      required bool isNextGenAdmob,
+    });
+
 abstract class FlutterBoomPdfAdListener {
   const FlutterBoomPdfAdListener();
 
@@ -109,6 +118,16 @@ abstract class FlutterBoomPdfAdListener {
     String adNetwork,
     String precisionType,
     AdInfoBean info,
+  ) {}
+
+  /// Receives a rendered native creative's headline with platform context.
+  void onNativeAdHeadline(
+    Object placement,
+    AdInfoBean info,
+    String platform,
+    String adNetwork,
+    String? headline,
+    bool isNextGenAdmob,
   ) {}
   void onTachi25OneDayRevenueEvent(String eventName) {}
   void onTachi25TotalRevenueEvent(String eventName) {}
@@ -307,6 +326,7 @@ class FlutterBoomPdfAdCorePlugins {
   final Random _debugRevenueRandom = Random();
 
   FlutterBoomPdfAdListener? _listener;
+  NativeAdHeadlineCallback? _nativeAdHeadlineCallback;
   Duration? _requestFallbackDelay;
   String? _smallNativeAdLayoutName;
   AdChoicesPlacement _nativeAdChoicesPlacement =
@@ -356,9 +376,11 @@ class FlutterBoomPdfAdCorePlugins {
 
   Future<void> initPlugins({
     required String distinctId,
+    NativeAdHeadlineCallback? nativeAdHeadlineCallback,
     String? smallNativeAdLayoutName,
     Object nativeAdChoicesPlacement = AdChoicesPlacement.bottomLeftCorner,
   }) async {
+    _nativeAdHeadlineCallback = nativeAdHeadlineCallback;
     _smallNativeAdLayoutName = _normalizeOptional(smallNativeAdLayoutName);
     _nativeAdChoicesPlacement = _parseAdChoicesPlacement(
       nativeAdChoicesPlacement,
@@ -1347,6 +1369,28 @@ class FlutterBoomPdfAdCorePlugins {
         }
       case AdNetworkEventType.paid:
         unawaited(_handlePaidEvent(placement, entry, event));
+      case AdNetworkEventType.nativeHeadline:
+        if (entry.nativeHeadlineNotified) return;
+        entry.nativeHeadlineNotified = true;
+        final headline = event.headline;
+        final isNextGenAdmob = event.isNextGenAdmob;
+        _listener?.onNativeAdHeadline(
+          placement,
+          entry.info,
+          entry.ad.networkId,
+          entry.ad.adNetwork,
+          headline,
+          isNextGenAdmob,
+        );
+        final callback = _nativeAdHeadlineCallback;
+        if (callback != null) {
+          unawaited(
+            Future<void>.sync(
+              () =>
+                  callback(headline: headline, isNextGenAdmob: isNextGenAdmob),
+            ).catchError((_) {}),
+          );
+        }
     }
   }
 

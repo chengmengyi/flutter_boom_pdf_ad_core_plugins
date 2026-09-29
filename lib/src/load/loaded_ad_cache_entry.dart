@@ -21,6 +21,7 @@ class LoadedAdCacheEntry {
   StreamSubscription<AdNetworkEvent>? eventSubscription;
   bool showSuccessNotified = false;
   bool closedNotified = false;
+  bool nativeHeadlineNotified = false;
 
   Object get rawAd => ad.rawAd;
 
