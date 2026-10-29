@@ -1,8 +1,20 @@
 import '../model/ad_models.dart';
 import '../model/ad_type.dart';
 
+/// Controls when Core should start replenishing a displayed full-screen ad.
+enum AdRefillTrigger {
+  /// Refill after the displayed ad has closed and its cache is consumed.
+  afterClose,
+
+  /// Start refilling as soon as the displayed ad reports a successful show.
+  afterShowSuccess,
+}
+
 abstract class FlutterBoomPdfAdAdapter {
   String get networkId;
+
+  /// The default preserves the close-then-refill behavior used by most SDKs.
+  AdRefillTrigger get refillTrigger => AdRefillTrigger.afterClose;
 
   /// Whether this adapter must complete its consent flow before its SDK can be
   /// initialized and its ads can be requested.

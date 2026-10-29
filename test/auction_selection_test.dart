@@ -482,6 +482,89 @@ void main() {
     expect(tradplus.loadCount, 2);
   });
 
+  test('AdMob refills after show success before the ad closes', () async {
+    final admob = _ControlledShowAdapter(
+      networkId: 'admob',
+      refillTrigger: AdRefillTrigger.afterShowSuccess,
+    );
+    core
+      ..registerAdapter(admob)
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('admob')],
+      });
+
+    await core.loadPlacement('home', force: true);
+    final displayedAd = admob.loadedAds.single;
+    var showCompleted = false;
+    final showing = core
+        .showCachedAd('home', adPosId: 'test', context: null)
+        .then((value) {
+          showCompleted = true;
+          return value;
+        });
+    await displayedAd.shown.future;
+    for (var attempt = 0; attempt < 20 && admob.loadCount < 2; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+    }
+
+    expect(showCompleted, isFalse);
+    expect(admob.loadCount, 2);
+
+    displayedAd.dismiss();
+    expect(await showing, isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    expect(admob.loadCount, 2);
+  });
+
+  test('TradPlus still refills only after the ad closes', () async {
+    final tradplus = _ControlledShowAdapter(networkId: 'tradplus');
+    core
+      ..registerAdapter(tradplus)
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('tradplus')],
+      });
+
+    await core.loadPlacement('home', force: true);
+    final displayedAd = tradplus.loadedAds.single;
+    final showing = core.showCachedAd('home', adPosId: 'test', context: null);
+    await displayedAd.shown.future;
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+
+    expect(tradplus.loadCount, 1);
+
+    displayedAd.dismiss();
+    expect(await showing, isTrue);
+    for (var attempt = 0; attempt < 20 && tradplus.loadCount < 2; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+    }
+    expect(tradplus.loadCount, 2);
+  });
+
+  test('skip reload also disables AdMob early refill', () async {
+    final admob = _ControlledShowAdapter(
+      networkId: 'admob',
+      refillTrigger: AdRefillTrigger.afterShowSuccess,
+    );
+    core
+      ..registerAdapter(admob)
+      ..updateSkipReloadAfterClosePlacements(<String>['home'])
+      ..updateConfigs<String>(<String, List<AdInfoBean>>{
+        'home': <AdInfoBean>[_info('admob')],
+      });
+
+    await core.loadPlacement('home', force: true);
+    final displayedAd = admob.loadedAds.single;
+    final showing = core.showCachedAd('home', adPosId: 'test', context: null);
+    await displayedAd.shown.future;
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    expect(admob.loadCount, 1);
+
+    displayedAd.dismiss();
+    expect(await showing, isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    expect(admob.loadCount, 1);
+  });
+
   test(
     'reloads every configured network that has no cache after show',
     () async {
@@ -875,4 +958,84 @@ class _FakeAuctionAd extends _FakeAd implements AdAuctionCandidate {
     }
     return result;
   }
+}
+
+class _ControlledShowAdapter extends FlutterBoomPdfAdAdapter {
+  _ControlledShowAdapter({
+    required this.networkId,
+    this.refillTrigger = AdRefillTrigger.afterClose,
+  });
+
+  @override
+  final String networkId;
+
+  @override
+  final AdRefillTrigger refillTrigger;
+
+  final List<_ControlledShowAd> loadedAds = <_ControlledShowAd>[];
+  int loadCount = 0;
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  bool supports(AdType adType) => true;
+
+  @override
+  Future<AdLoadResult> load(AdLoadRequest request) async {
+    loadCount++;
+    final ad = _ControlledShowAd(networkId);
+    loadedAds.add(ad);
+    return AdLoadResult.success(ad);
+  }
+}
+
+class _ControlledShowAd implements LoadedNetworkAd {
+  _ControlledShowAd(this.networkId);
+
+  @override
+  final String networkId;
+  final StreamController<AdNetworkEvent> _events =
+      StreamController<AdNetworkEvent>.broadcast(sync: true);
+  final Completer<void> shown = Completer<void>();
+  final Completer<void> _dismissed = Completer<void>();
+
+  @override
+  String get adNetwork => networkId;
+
+  @override
+  String get adSourceName => networkId;
+
+  @override
+  AdType get adType => AdType.interstitial;
+
+  @override
+  Stream<AdNetworkEvent> get events => _events.stream;
+
+  @override
+  Object get rawAd => this;
+
+  @override
+  bool get supportsWidget => false;
+
+  @override
+  Widget? buildWidget() => null;
+
+  void dismiss() {
+    if (!_dismissed.isCompleted) _dismissed.complete();
+  }
+
+  @override
+  Future<AdShowResult> show({
+    OnUserEarnedRewardCallback? onUserEarnedReward,
+  }) async {
+    _events.add(const AdNetworkEvent.impression());
+    if (!shown.isCompleted) shown.complete();
+    await _dismissed.future;
+    _events.add(const AdNetworkEvent.closed());
+    return const AdShowResult.success();
+  }
+
+  @override
+  Future<void> dispose() => _events.close();
 }

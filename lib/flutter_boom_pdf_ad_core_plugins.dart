@@ -1472,6 +1472,24 @@ class FlutterBoomPdfAdCorePlugins {
       entry.ad.adNetwork,
       entry.ad.adSourceName,
     );
+    if (_shouldRefillAfterShowSuccess(placement, entry)) {
+      unawaited(_refillNetwork(placement, entry.ad.networkId));
+    }
+  }
+
+  bool _shouldRefillAfterShowSuccess(
+    Object placement,
+    LoadedAdCacheEntry entry,
+  ) {
+    if (_skipReloadAfterClosePlacements.contains(placement)) return false;
+    final type = entry.info.parsedAdType;
+    final isFullScreen = type?.isFullScreen == true;
+    final isFullScreenNative =
+        type == AdType.native &&
+        _interstitialLikeNativePlacements.contains(placement);
+    if (!isFullScreen && !isFullScreenNative) return false;
+    return _adapters[entry.ad.networkId]?.refillTrigger ==
+        AdRefillTrigger.afterShowSuccess;
   }
 
   void _notifyClosed(Object placement, LoadedAdCacheEntry entry) {
@@ -1491,6 +1509,27 @@ class FlutterBoomPdfAdCorePlugins {
     await entry.dispose();
     if (!_skipReloadAfterClosePlacements.contains(placement)) {
       unawaited(_reloadMissingNetworks(placement));
+    }
+  }
+
+  Future<void> _refillNetwork(Object placement, String networkId) async {
+    try {
+      final configs = await _resolveConfigs(placement);
+      if (configs == null || configs.isEmpty) return;
+      final networkConfigs = configs
+          .where((info) => info.normalizedNetworkId == networkId)
+          .toList(growable: false);
+      if (networkConfigs.isEmpty) return;
+      await loadPlacement<Object>(
+        placement,
+        configs: networkConfigs,
+        force: true,
+      );
+    } catch (error) {
+      _log(
+        'reload-after-show-success-failed '
+        'placement=$placement network=$networkId error=$error',
+      );
     }
   }
 
